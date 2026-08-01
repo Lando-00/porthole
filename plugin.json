@@ -1,0 +1,21 @@
+{
+  "name": "opensession",
+  "description": "Open the current repo/worktree and the current Copilot CLI session folder together in one VS Code or VS Code Insiders workspace.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Lando-00",
+    "url": "https://github.com/Lando-00"
+  },
+  "homepage": "https://github.com/Lando-00/opensession-plugin",
+  "repository": "https://github.com/Lando-00/opensession-plugin",
+  "license": "MIT",
+  "category": "productivity",
+  "keywords": [
+    "vscode",
+    "workspace",
+    "session",
+    "copilot-cli",
+    "worktree"
+  ],
+  "skills": "skills/"
+}
