@@ -1,21 +1,22 @@
 {
-  "name": "opensession",
-  "description": "Open the current repo/worktree and the current Copilot CLI session folder together in one VS Code or VS Code Insiders workspace.",
-  "version": "0.1.0",
+  "name": "porthole",
+  "description": "A window from your Copilot CLI session into VS Code: open diffs, mermaid diagrams, files at a line, scratch notes, and your session folder.",
+  "version": "0.2.0",
   "author": {
     "name": "Lando-00",
     "url": "https://github.com/Lando-00"
   },
-  "homepage": "https://github.com/Lando-00/opensession-plugin",
-  "repository": "https://github.com/Lando-00/opensession-plugin",
+  "homepage": "https://github.com/Lando-00/porthole",
+  "repository": "https://github.com/Lando-00/porthole",
   "license": "MIT",
   "category": "productivity",
   "keywords": [
     "vscode",
     "workspace",
     "session",
-    "copilot-cli",
-    "worktree"
+    "diff",
+    "mermaid",
+    "copilot-cli"
   ],
   "skills": "skills/"
 }

@@ -79,6 +79,11 @@ To build the workspace without launching an editor, add `-DryRun` / `--dry-run`.
 
 Report the project root, the session folder, and which editor was launched.
 
+If Copilot CLI is already connected to an IDE, the script **reuses that window**
+and adds the session folder to it with `--add`, instead of opening a second
+window on a generated workspace. It will say so; report that too. Pass
+`-ForceWorkspace` if the user explicitly wants a separate workspace window.
+
 If the script reports that no editor was found, tell the user to install VS Code
 or add its `bin` directory to `PATH` — do not try to launch an editor another way.
 
