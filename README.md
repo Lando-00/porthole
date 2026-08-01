@@ -1,144 +1,158 @@
-# opensession
+# porthole
 
-A [GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents/copilot-cli/about-copilot-cli)
-plugin that opens your **current project** and your **current Copilot CLI session
-folder** together in a **single** VS Code / VS Code Insiders workspace.
+A window from your [GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents/copilot-cli/about-copilot-cli)
+session into VS Code.
 
-```
-/open-session      →   one editor window
-/cops                  ├── opensession-plugin              (your repo / worktree)
-                       └── Copilot Session (eeb847a2)      (~/.copilot/session-state/<id>/)
-```
-
-Stop alt-tabbing between your code and the session artifacts the agent is
-writing. They live in one window.
+Ask Copilot to show you something, and it appears in your editor — diffs,
+diagrams, files at a line, scratch notes — **in the window you already have open**.
 
 ## Commands
 
-| Command | Description |
+| Command | What it does |
 |---|---|
-| `/open-session` | Open project + current session folder in one workspace |
-| `/cops` | Short alias for the same thing |
+| `/open-session` · `/cops` | Open the project + current session folder together |
+| `/vsdiff` | Open diffs: uncommitted, staged, a commit, a range, or two files |
+| `/vsreview` | Open every file changed on a branch as diffs |
+| `/diagram` | Write a mermaid diagram and open it **rendered** |
+| `/goto` | Open a file at `line:col` |
+| `/scratch` | Create/open a scratch note in the session folder |
 
-### Arguments
-
-| Invocation | Behaviour |
-|---|---|
-| `/open-session` | Prefers VS Code Insiders, falls back to VS Code |
-| `/open-session insiders` | Force VS Code Insiders |
-| `/open-session code` | Force VS Code stable |
+> `/diff` and `/review` are already built-in Copilot CLI commands, so these are
+> named `/vsdiff` and `/vsreview` to avoid colliding with them.
 
 ## Install
 
 ```shell
-copilot plugin marketplace add Lando-00/opensession-plugin
-copilot plugin install opensession@opensession-marketplace
+copilot plugin marketplace add Lando-00/porthole
+copilot plugin install porthole@porthole-marketplace
 ```
 
-<details>
-<summary>Installing from a local clone</summary>
-
-```shell
-copilot plugin install ./opensession-plugin
-```
-
-Direct installs from local paths, repos, and URLs still work, but the CLI prints
-a deprecation warning — `plugin@marketplace` is the supported route going
-forward. See [Local development](#local-development) for the reinstall caveat.
-
-</details>
-
-Verify:
-
-```shell
-copilot plugin list
-copilot skill list
-```
+Verify with `copilot plugin list` and `copilot skill list`.
 
 ## Requirements
 
-- GitHub Copilot CLI (developed and verified against **1.0.77**)
-- `code` or `code-insiders` on your `PATH`
-- `git` on your `PATH` (optional — non-repo folders work fine)
+- GitHub Copilot CLI (developed against **1.0.77**)
+- `code-insiders` or `code` on your `PATH` — Insiders is preferred by default
+- `git` on your `PATH` (optional; non-repo folders still work)
 
-## How it works
+## It reuses your open editor
 
-1. Resolves the **project root** with `git rev-parse --show-toplevel`, falling
-   back to the current directory when you are not in a repository. Linked git
-   worktrees correctly resolve to the *worktree* root, not the main repo.
-2. Resolves the **current session folder**. The agent passes its own session path
-   directly; if unavailable, the script falls back to the most recently modified
-   directory under `$COPILOT_HOME/session-state` (default `~/.copilot`).
-3. Writes a `.code-workspace` file listing **both** folders as named roots.
-4. Launches the editor on that workspace file, detached, so your CLI session
-   never blocks.
+The headline behaviour. Copilot CLI writes a lock file per connected IDE window
+into `~/.copilot/ide/`, recording `ideName`, `pid` and `workspaceFolders`.
+porthole reads those locks, skips any whose process is no longer alive, and
+prefers the window whose workspace contains the path you are working on.
 
-The workspace file is written to your system temp directory —
-`%TEMP%\opensession-workspaces\` or `$TMPDIR/opensession-workspaces/` — so it is
-**never** written into your repository and can never be committed by accident.
-Its filename is deterministic per project + session, so re-running reuses the
-same workspace instead of piling up duplicates.
+When a window is found, every command targets **that** window:
 
-## Running the script directly
+- `/open-session` adds the session folder to it with `--add` instead of opening
+  a second window on a generated workspace
+- `/vsdiff`, `/goto` and `/scratch` open into it with `--reuse-window`
+- the matching binary is chosen from `ideName`, so an Insiders session never gets
+  hijacked by stable VS Code
 
-The scripts are plain and work standalone, without the plugin:
+With no IDE connected, porthole falls back to launching Insiders (then stable).
+Passing `-Editor insiders|code` explicitly always wins.
+
+Check what porthole sees right now:
 
 ```powershell
-# Windows
-.\scripts\open-session.ps1 -SessionPath <session folder> [-ProjectPath <path>] [-Editor auto|insiders|code] [-DryRun]
+.\tests\probe-ide.ps1
 ```
 
-```bash
-# macOS / Linux
-./scripts/open-session.sh --session <session folder> [--project <path>] [--editor auto|insiders|code] [--dry-run]
+## Diagrams
+
+Mermaid rendering is **built into VS Code** — the `mermaid-markdown-features`
+extension ships with the product, so there is nothing to install.
+
+Getting a file to open *rendered* is the harder part: the CLI has no
+"open preview" flag. porthole uses the `workbench.editorAssociations` setting to
+map `*.diagram.md` to `vscode.markdown.preview.editor`.
+
+- In a porthole-generated workspace, that association is already set.
+- When reusing **your** window, the association has to live in your user
+  settings. Register it once:
+
+```powershell
+.\scripts\setup.ps1 -RegisterDiagramPreview
 ```
 
-`-DryRun` / `--dry-run` builds and reports the workspace file without launching
-an editor — handy for testing.
+That adds a single key, backs up `settings.json` first, and is reversible with
+`-Remove`. Without it, diagrams still open — just as source, until you press
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>.
+
+## Why not `git difftool`?
+
+Because it hangs the agent. `git difftool` deletes its temporary files as soon as
+the command returns, so it must block until you close the editor — measured at
+120s+ before being killed.
+
+porthole materialises both sides of every diff into a persistent temp directory
+and launches the editor detached. Added and deleted files diff against an empty
+placeholder so they still render.
+
+## Running the scripts directly
+
+Every script works standalone, without the plugin:
+
+```powershell
+.\scripts\open-session.ps1 -SessionPath <folder> [-ForceWorkspace] [-DryRun]
+.\scripts\vsdiff.ps1       [-Ref <commit|range|staged>] [-Files a,b] [-Path <filter>] [-MaxFiles 25]
+.\scripts\vsreview.ps1     [-Base origin/main] [-Head <branch>] [-MaxFiles 25]
+.\scripts\diagram.ps1      -Name <name> -Mermaid "<source>" [-MermaidFile <path>] [-ForcePreviewWorkspace]
+.\scripts\goto.ps1         -Target "src/app.ts:42:9" [-NewWindow]
+.\scripts\scratch.ps1      [-Name <note>] [-Content "..."] [-Rendered]
+.\scripts\setup.ps1        [-RegisterDiagramPreview] [-Remove] [-Flavour insiders|code|both]
+```
+
+All of them accept `-Editor auto|insiders|code` and `-DryRun`.
+
+`open-session.sh` provides the POSIX equivalent of `/open-session`. The remaining
+scripts are PowerShell; on macOS and Linux run them with `pwsh`.
 
 ## Layout
 
 ```text
-opensession-plugin/
-├── plugin.json                        # manifest
-├── skills/
-│   ├── open-session/SKILL.md          # /open-session
-│   └── cops/SKILL.md                  # /cops
+porthole/
+├── plugin.json
+├── skills/                         # one folder per slash command
+│   ├── open-session/  cops/
+│   ├── vsdiff/        vsreview/
+│   └── diagram/       goto/        scratch/
 ├── scripts/
-│   ├── open-session.ps1               # Windows
-│   └── open-session.sh                # macOS / Linux
-└── .github/plugin/marketplace.json    # lets this repo act as its own marketplace
+│   ├── common.ps1                  # IDE detection, editor routing, git helpers
+│   ├── open-session.ps1  open-session.sh
+│   ├── vsdiff.ps1     vsreview.ps1
+│   ├── diagram.ps1    goto.ps1     scratch.ps1
+│   └── setup.ps1
+├── tests/probe-ide.ps1             # what does porthole see right now?
+└── .github/plugin/marketplace.json # this repo is its own marketplace
 ```
 
 ## Local development
 
-Plugin components are **cached** at install time. After editing files, refresh
-the cache:
+Components are cached at install time, so reinstall to pick up edits:
 
 ```shell
-copilot plugin install ./opensession-plugin
+copilot plugin install porthole@porthole-marketplace
 ```
 
-> **Windows caveat (CLI 1.0.77):** reinstalling *over* an existing direct install
-> fails reproducibly with `Access is denied. (os error 5)`, and
-> `copilot plugin uninstall` fails the same way. Remove the cached copy first:
->
-> ```powershell
-> Remove-Item "$env:USERPROFILE\.copilot\installed-plugins\_direct\opensession-plugin" -Recurse -Force
-> copilot plugin install ./opensession-plugin
-> ```
+> **Windows caveat (CLI 1.0.77):** reinstalling over an existing *direct* install
+> fails with `Access is denied. (os error 5)`, and `copilot plugin uninstall`
+> fails the same way. Marketplace installs are unaffected. If you hit it, delete
+> `~/.copilot/installed-plugins/_direct/<dir>` and reinstall.
 
-Alternatively, skip the cache entirely and load the plugin straight from disk:
+Or skip the cache entirely:
 
 ```shell
-copilot --plugin-dir ./opensession-plugin
+copilot --plugin-dir ./porthole
 ```
 
-### Note on `${PLUGIN_ROOT}`
+### `${PLUGIN_ROOT}` doesn't work in skills
 
-`${PLUGIN_ROOT}` is **not** expanded inside `SKILL.md` bodies — it is only
-resolved in MCP and LSP server configuration. The skills here therefore locate
-the scripts relative to the skill file (`../../scripts/`) instead.
+It is only expanded in MCP and LSP configuration — **not** in `SKILL.md` bodies.
+The skills here locate scripts relative to the skill file (`../../scripts/`)
+instead. This fails silently if you get it wrong: the literal string reaches the
+agent, which then guesses at a path.
 
 ## License
 
