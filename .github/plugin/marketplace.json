@@ -1,0 +1,19 @@
+{
+  "name": "opensession-marketplace",
+  "owner": {
+    "name": "Lando-00",
+    "url": "https://github.com/Lando-00"
+  },
+  "metadata": {
+    "description": "Single-plugin marketplace for the opensession Copilot CLI plugin",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "opensession",
+      "description": "Open the current repo/worktree and the current Copilot CLI session folder together in one VS Code or VS Code Insiders workspace.",
+      "version": "0.1.0",
+      "source": "."
+    }
+  ]
+}
