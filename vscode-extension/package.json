@@ -27,8 +27,8 @@
   ],
   "main": "./extension.js",
   "scripts": {
-    "package": "vsce package --allow-missing-repository --skip-license",
-    "install-local": "vsce package --allow-missing-repository --skip-license -o porthole-companion.vsix && code-insiders --install-extension porthole-companion.vsix --force"
+    "package": "npx --yes @vscode/vsce package --allow-missing-repository --skip-license -o porthole-companion.vsix",
+    "install-local": "npm run package && code-insiders --install-extension porthole-companion.vsix --force"
   },
   "contributes": {
     "commands": [
