@@ -31,6 +31,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { joinSession } from "@github/copilot-sdk/extension";
 
 import { config, copilotHome, reportConfigProblems } from "./lib/config.mjs";
+import { callCompanion, explain } from "./lib/companion.mjs";
 import { git, projectRoot, isGitRepo } from "./lib/git.mjs";
 import {
     launchEditor,
@@ -82,30 +83,15 @@ function writeJson(path, value) {
  * Asks the porthole companion VS Code extension to select and highlight a range.
  *
  * The VS Code CLI cannot select a range - `--goto` only places a cursor - so
- * this is delegated to the companion extension over its URI handler.
+ * this is delegated to the companion. Unlike a bare URI, the call is confirmed:
+ * the caller learns whether the range was actually selected.
  */
-function revealRange(session, launcherPath, file, startLine, endLine) {
-    const exe = resolveEditorExe(launcherPath);
-    if (!exe) return false;
-
-    // The URI authority is the extension id, which VS Code lower-cases.
-    const scheme = /insiders/i.test(exe) ? "vscode-insiders" : "vscode";
-    const query =
-        `file=${encodeURIComponent(file)}` +
-        `&start=${startLine}` +
-        (endLine && endLine !== startLine ? `&end=${endLine}` : "");
-    const uri = `${scheme}://lando-00.porthole-companion/reveal?${query}`;
-
-    const child = spawn(exe, ["--open-url", "--", uri], {
-        detached: true,
-        stdio: ["ignore", "ignore", "pipe"],
-        windowsHide: true,
-    });
-    child.on("error", (err) => {
-        void session.log(`porthole: could not reach the companion extension - ${err.message}`);
-    });
-    child.unref();
-    return true;
+async function revealRange(file, startLine, endLine) {
+    return callCompanion(
+        "reveal",
+        { file, start: startLine, end: endLine || startLine },
+        { contextPath: dirname(file) },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -370,20 +356,25 @@ async function handleGoto(session, ctx) {
     // A real multi-line selection needs the companion extension; the CLI alone
     // can only place a cursor.
     if (endLine && endLine !== startLine) {
-        // Open the file first so the range lands in the right window, then select.
-        launchEditor(session, target.command, ["--reuse-window", "--goto", `${resolved}:${startLine}`]);
-        const ok = revealRange(session, target.command, resolved, startLine, endLine);
-        if (ok) {
+        const result = await revealRange(resolved, startLine, endLine);
+        if (result.ok) {
             await session.log(
-                `porthole: highlighted ${resolved} lines ${startLine}-${endLine}${where}.\n` +
-                    "  (needs the porthole companion VS Code extension; see vscode-extension/)",
+                `porthole: highlighted ${resolved} lines ${result.startLine}-${result.endLine}${where}.`,
             );
-        } else {
-            await session.log(
-                `porthole: opened ${resolved} at line ${startLine}${where}. ` +
-                    "Could not locate the editor executable to request a range selection.",
-            );
+            return;
         }
+
+        // Say what actually happened rather than claiming a highlight that
+        // never arrived, and still get the user to the right line.
+        launchEditor(session, target.command, [
+            "--reuse-window",
+            "--goto",
+            `${resolved}:${startLine}`,
+        ]);
+        await session.log(
+            `porthole: opened ${resolved} at line ${startLine}${where}, without the range selection.\n` +
+                `  ${explain(result)}`,
+        );
         return;
     }
 
