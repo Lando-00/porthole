@@ -2,7 +2,7 @@
   "name": "porthole-companion",
   "displayName": "porthole companion",
   "description": "Lets the porthole Copilot CLI plugin reveal and highlight ranges in this window.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "Lando-00",
   "license": "MIT",
   "repository": {
@@ -26,6 +26,10 @@
     "onStartupFinished"
   ],
   "main": "./extension.js",
+  "scripts": {
+    "package": "vsce package --allow-missing-repository --skip-license",
+    "install-local": "vsce package --allow-missing-repository --skip-license -o porthole-companion.vsix && code-insiders --install-extension porthole-companion.vsix --force"
+  },
   "contributes": {
     "commands": [
       {
@@ -55,6 +59,11 @@
           "default": 2500,
           "minimum": 0,
           "description": "How long the flash decoration stays visible. 0 keeps it until cleared."
+        },
+        "porthole.diagnostics": {
+          "type": "boolean",
+          "default": false,
+          "description": "Write a diagnostics log to the temp folder (porthole-companion.log). Only needed when a porthole command appears to do nothing."
         }
       }
     }
