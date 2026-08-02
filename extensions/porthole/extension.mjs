@@ -204,6 +204,64 @@ function resolveEditorTarget(contextPath) {
 }
 
 /**
+ * Finds the editor executable that sits beside the `bin/` launcher shim.
+ *
+ * `--open-url` must go to the .exe: the bin/*.cmd shim blocks without ever
+ * delivering the URI (verified on VS Code Insiders 1.132). Everything else is
+ * happy with the shim.
+ *
+ * Layout:  <install>\bin\code-insiders.cmd  ->  <install>\Code - Insiders.exe
+ */
+function resolveEditorExe(launcherPath) {
+    if (!isWindows) return launcherPath;
+
+    const binDir = dirname(launcherPath);
+    const installRoot = dirname(binDir);
+    const candidates = [
+        "Code - Insiders.exe",
+        "Code.exe",
+        "Cursor.exe",
+        "Windsurf.exe",
+    ];
+    for (const name of candidates) {
+        const candidate = join(installRoot, name);
+        if (existsSync(candidate)) return candidate;
+    }
+    return null;
+}
+
+/**
+ * Asks the porthole companion VS Code extension to select and highlight a range.
+ *
+ * The VS Code CLI cannot select a range - `--goto` only places a cursor - so
+ * this is delegated to the companion extension over its URI handler. Returns
+ * false when the companion cannot be driven, so callers can fall back.
+ */
+function revealRange(session, launcherPath, file, startLine, endLine) {
+    const exe = resolveEditorExe(launcherPath);
+    if (!exe) return false;
+
+    // The URI authority is the extension id, which VS Code lower-cases.
+    const scheme = /insiders/i.test(exe) ? "vscode-insiders" : "vscode";
+    const query =
+        `file=${encodeURIComponent(file)}` +
+        `&start=${startLine}` +
+        (endLine && endLine !== startLine ? `&end=${endLine}` : "");
+    const uri = `${scheme}://lando-00.porthole-companion/reveal?${query}`;
+
+    const child = spawn(exe, ["--open-url", "--", uri], {
+        detached: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+    });
+    child.on("error", (err) => {
+        void session.log(`porthole: could not reach the companion extension - ${err.message}`);
+    });
+    child.unref();
+    return true;
+}
+
+/**
  * Launches the editor fully detached.
  *
  * Windows needs care here:
@@ -470,16 +528,28 @@ async function handleVsDiff(session, ctx) {
 async function handleGoto(session, ctx) {
     const raw = (ctx.args || "").trim();
     if (!raw) {
-        await session.log("porthole: usage - /goto <file>[:line[:column]]");
+        await session.log("porthole: usage - /goto <file>[:line[:column]]  or  /goto <file>:<start>-<end>");
         return;
     }
 
     let filePart = raw;
     let position = "";
-    const m = /^(?<f>.+?):(?<l>\d+)(?::(?<c>\d+))?$/.exec(raw);
-    if (m && m.groups.f.length > 1) {
-        filePart = m.groups.f;
-        position = m.groups.c ? `:${m.groups.l}:${m.groups.c}` : `:${m.groups.l}`;
+    let startLine = 0;
+    let endLine = 0;
+
+    // file:start-end selects a range; file:line[:col] just places a cursor.
+    const rangeMatch = /^(?<f>.+?):(?<s>\d+)-(?<e>\d+)$/.exec(raw);
+    const pointMatch = /^(?<f>.+?):(?<l>\d+)(?::(?<c>\d+))?$/.exec(raw);
+
+    if (rangeMatch && rangeMatch.groups.f.length > 1) {
+        filePart = rangeMatch.groups.f;
+        startLine = Number.parseInt(rangeMatch.groups.s, 10);
+        endLine = Number.parseInt(rangeMatch.groups.e, 10);
+        position = `:${startLine}`;
+    } else if (pointMatch && pointMatch.groups.f.length > 1) {
+        filePart = pointMatch.groups.f;
+        startLine = Number.parseInt(pointMatch.groups.l, 10);
+        position = pointMatch.groups.c ? `:${startLine}:${pointMatch.groups.c}` : `:${startLine}`;
     }
 
     const cwd = process.cwd();
@@ -507,9 +577,29 @@ async function handleGoto(session, ctx) {
         return;
     }
 
-    launchEditor(session, target.command, ["--reuse-window", "--goto", `${resolved}${position}`]);
-
     const where = target.connected ? ` in the connected ${target.ideName} window` : "";
+
+    // A real multi-line selection needs the companion extension; the CLI alone
+    // can only place a cursor.
+    if (endLine && endLine !== startLine) {
+        // Open the file first so the range lands in the right window, then select.
+        launchEditor(session, target.command, ["--reuse-window", "--goto", `${resolved}:${startLine}`]);
+        const ok = revealRange(session, target.command, resolved, startLine, endLine);
+        if (ok) {
+            await session.log(
+                `porthole: highlighted ${resolved} lines ${startLine}-${endLine}${where}.\n` +
+                    "  (needs the porthole companion VS Code extension; see vscode-extension/)",
+            );
+        } else {
+            await session.log(
+                `porthole: opened ${resolved} at line ${startLine}${where}. ` +
+                    "Could not locate the editor executable to request a range selection.",
+            );
+        }
+        return;
+    }
+
+    launchEditor(session, target.command, ["--reuse-window", "--goto", `${resolved}${position}`]);
     await session.log(`porthole: opened ${resolved}${position}${where}.`);
 }
 
@@ -539,7 +629,7 @@ const session = await joinSession({
         },
         {
             name: "goto",
-            description: "Open a file in VS Code at a position: /goto <file>[:line[:column]]",
+            description: "Open a file in VS Code: /goto <file>[:line[:col]] or <file>:<start>-<end> to highlight a range",
             handler: (ctx) => handleGoto(session, ctx),
         },
     ],

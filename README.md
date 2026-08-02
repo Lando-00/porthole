@@ -18,6 +18,7 @@ same behaviour every time, no model in the loop, no tokens spent.
 | `/cops` · `/open-session` | Open this worktree + the current session folder in one workspace |
 | `/vsdiff` | Diffs: no args = uncommitted; or a commit, a range, `staged`, or two file paths |
 | `/goto <file:line:col>` | Jump to a position |
+| `/goto <file:start-end>` | **Select and highlight a range** (needs the companion extension) |
 
 **Agent-driven** — skills, where interpretation is the point.
 
@@ -85,6 +86,31 @@ Check what porthole sees right now:
 .\tests\probe-ide.ps1
 ```
 
+## Highlighting a range
+
+`code --goto file:line:col` places a **cursor**; the VS Code CLI has no flag to
+select a range. The optional companion extension in
+[`vscode-extension/`](vscode-extension/) closes that gap.
+
+```shell
+cd vscode-extension
+npx @vscode/vsce package
+code-insiders --install-extension porthole-companion-0.1.0.vsix
+```
+
+Then `/goto extensions/porthole/extension.mjs:223-270` selects and highlights
+those lines instead of just jumping to line 223. Without the companion, that form
+degrades to a plain jump — nothing breaks.
+
+Two details worth knowing, both found the hard way:
+
+- **`--open-url` needs the `.exe`, not the `bin/` shim.** Driving it through
+  `code-insiders.cmd` blocks and never delivers the URI. porthole resolves the
+  executable next to the shim.
+- **The extension activates on `onStartupFinished`, not just `onUri`.** `onUri`
+  alone did not reliably wake it, so the handler would not be registered when
+  the URI arrived.
+
 ## Diagrams
 
 Mermaid rendering is **built into VS Code** — the `mermaid-markdown-features`
@@ -142,6 +168,9 @@ porthole/
 ├── plugin.json
 ├── extensions/porthole/
 │   └── extension.mjs               # deterministic /cops /open-session /vsdiff /goto
+├── vscode-extension/               # optional VS Code companion (range highlighting)
+│   ├── package.json  extension.js
+│   └── README.md
 ├── skills/                         # agent-driven commands
 │   ├── diagram/  vsreview/  scratch/
 ├── scripts/                        # standalone PowerShell equivalents

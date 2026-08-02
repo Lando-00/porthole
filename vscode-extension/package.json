@@ -1,0 +1,62 @@
+{
+  "name": "porthole-companion",
+  "displayName": "porthole companion",
+  "description": "Lets the porthole Copilot CLI plugin reveal and highlight ranges in this window.",
+  "version": "0.1.0",
+  "publisher": "Lando-00",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Lando-00/porthole"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "copilot",
+    "cli",
+    "porthole",
+    "highlight"
+  ],
+  "activationEvents": [
+    "onUri",
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "porthole.clearHighlight",
+        "title": "porthole: Clear highlight"
+      },
+      {
+        "command": "porthole.showUriExample",
+        "title": "porthole: Show reveal URI for the current selection"
+      }
+    ],
+    "configuration": {
+      "title": "porthole companion",
+      "properties": {
+        "porthole.highlight.style": {
+          "type": "string",
+          "enum": [
+            "selection",
+            "flash",
+            "both"
+          ],
+          "default": "both",
+          "description": "How a revealed range is shown: as a real editor selection, a temporary flash decoration, or both."
+        },
+        "porthole.highlight.flashDurationMs": {
+          "type": "number",
+          "default": 2500,
+          "minimum": 0,
+          "description": "How long the flash decoration stays visible. 0 keeps it until cleared."
+        }
+      }
+    }
+  }
+}
