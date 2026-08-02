@@ -37,6 +37,22 @@
         "title": "porthole: Clear highlight"
       },
       {
+        "command": "porthole.clearAnnotations",
+        "title": "porthole: Clear annotations"
+      },
+      {
+        "command": "porthole.nextAnnotation",
+        "title": "porthole: Next annotation"
+      },
+      {
+        "command": "porthole.previousAnnotation",
+        "title": "porthole: Previous annotation"
+      },
+      {
+        "command": "porthole.listAnnotations",
+        "title": "porthole: List annotations"
+      },
+      {
         "command": "porthole.showUriExample",
         "title": "porthole: Show reveal URI for the current selection"
       }
@@ -64,6 +80,16 @@
           "type": "boolean",
           "default": false,
           "description": "Write a diagnostics log to the temp folder (porthole-companion.log). Only needed when a porthole command appears to do nothing."
+        },
+        "porthole.annotations.gutterIcons": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a gutter icon next to each annotated range."
+        },
+        "porthole.annotations.autoRevealFocus": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open and scroll to the focused annotation when a new set arrives."
         }
       }
     }
