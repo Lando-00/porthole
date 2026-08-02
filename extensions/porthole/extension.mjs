@@ -634,5 +634,4 @@ const session = await joinSession({
         },
     ],
 });
-
-await session.log("porthole ready - /cops, /open-session, /vsdiff, /goto");
+
