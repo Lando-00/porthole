@@ -6,6 +6,9 @@ session into VS Code.
 Ask Copilot to show you something, and it appears in your editor — diffs,
 diagrams, files at a line, scratch notes — **in the window you already have open**.
 
+And when Copilot explains code, it can **annotate the lines it is talking about**
+while it writes, so the explanation and the code are the same conversation.
+
 ## Commands
 
 Two kinds, deliberately:
@@ -19,6 +22,10 @@ same behaviour every time, no model in the loop, no tokens spent.
 | `/vsdiff` | Diffs: no args = uncommitted; or a commit, a range, `staged`, or two file paths |
 | `/goto <file:line:col>` | Jump to a position |
 | `/goto <file:start-end>` | **Select and highlight a range** (needs the companion extension) |
+| `/goto <symbolName>` | Select a function, class or constant **by name**, whole body |
+| `/annotate <file:start-end> [note]` | Leave a marked, hoverable note on those lines |
+| `/annotate-clear` | Remove every annotation |
+| `/porthole` | Diagnose everything: config, editors, connected windows, companion, session, git |
 
 **Agent-driven** — skills, where interpretation is the point.
 
@@ -30,6 +37,19 @@ same behaviour every time, no model in the loop, no tokens spent.
 
 > `/diff` and `/review` are already built-in Copilot CLI commands, hence
 > `/vsdiff` and `/vsreview`.
+
+## Tools Copilot can call
+
+Two tools are registered with the agent, so it can drive your editor mid-answer
+without you typing anything.
+
+| Tool | What it does |
+|---|---|
+| `porthole_annotate` | Marks the exact lines it is describing, with a message on hover |
+| `porthole_goto` | Opens a file, a range or a symbol, optionally annotating it |
+
+Ask *"walk me through how a porthole request reaches VS Code"* and the relevant
+ranges light up in the editor as the explanation arrives.
 
 ### Why the split
 
@@ -54,13 +74,49 @@ copilot plugin marketplace add Lando-00/porthole
 copilot plugin install porthole@porthole-marketplace
 ```
 
-Verify with `copilot plugin list` and `copilot skill list`.
+Then install the companion VS Code extension — annotations, range selection,
+symbol lookup and the sidebar all live there:
+
+```shell
+cd vscode-extension
+npm run install-local
+```
+
+Verify everything with `/porthole` in an interactive session.
+
+## Configuration
+
+Optional, at `~/.copilot/porthole.json`. Copy
+[`porthole.example.json`](porthole.example.json) and keep what you need.
+
+```jsonc
+{
+  "editor": "insiders",        // insiders | stable | cursor | windsurf | auto | an absolute path
+  "preferConnectedIde": true,  // drive the window you are already in
+  "workspaceDir": null,        // where generated workspace and diff files go; null = temp
+  "companionTimeoutMs": 2000,  // how long to wait for the companion to answer
+  "goto": { "symbolFallback": true }
+}
+```
+
+Editor precedence, highest first:
+
+1. `PORTHOLE_EDITOR`
+2. `editor` in the config
+3. the connected IDE window, when `preferConnectedIde` is on
+4. Insiders, then stable
+
+A standing preference beats the connected window on purpose: someone who wrote
+down "always stable" means it. A broken config never breaks a command — it falls
+back to defaults and tells you once.
 
 ## Requirements
 
 - GitHub Copilot CLI (developed against **1.0.77**)
 - `code-insiders` or `code` on your `PATH` — Insiders is preferred by default
 - `git` on your `PATH` (optional; non-repo folders still work)
+- Node 22+ for the sidebar's task list (used only if the editor cannot read
+  SQLite itself)
 
 ## It reuses your open editor
 
@@ -78,38 +134,59 @@ When a window is found, every command targets **that** window:
   hijacked by stable VS Code
 
 With no IDE connected, porthole falls back to launching Insiders (then stable).
-Passing `-Editor insiders|code` explicitly always wins.
+`PORTHOLE_EDITOR` and the `editor` config key both override this.
 
-Check what porthole sees right now:
+Check what porthole sees right now with `/porthole`, or standalone:
 
 ```powershell
 .\tests\probe-ide.ps1
 ```
 
-## Highlighting a range
+## The companion extension
 
-`code --goto file:line:col` places a **cursor**; the VS Code CLI has no flag to
-select a range. The optional companion extension in
-[`vscode-extension/`](vscode-extension/) closes that gap.
+`code --goto file:line:col` places a **cursor**. The VS Code CLI cannot select a
+range, annotate code, resolve a symbol, or tell you whether any of it worked.
+The companion in [`vscode-extension/`](vscode-extension/) does all four from
+inside the window, and adds a sidebar showing the session and its task list.
 
 ```shell
 cd vscode-extension
-npx @vscode/vsce package
-code-insiders --install-extension porthole-companion-0.1.0.vsix
+npm run install-local     # packages the VSIX and installs it into Insiders
 ```
 
-Then `/goto extensions/porthole/extension.mjs:223-270` selects and highlights
-those lines instead of just jumping to line 223. Without the companion, that form
-degrades to a plain jump — nothing breaks.
+New builds are picked up by **new windows**; reload an existing one.
+
+### How they talk
+
+One direction only, with a receipt:
+
+```
+1. CLI writes    <tmp>/porthole/req/<requestId>.json
+2. CLI fires     vscode-insiders://lando-00.porthole-companion/<route>?req=<requestId>
+3. companion     reads the payload, acts
+4. companion     writes <tmp>/porthole/ack/<requestId>.json  ->  { ok, ... }
+5. CLI polls     for the ack, then reports what actually happened
+```
+
+No socket, no listening port, nothing running in the background. Step 5 is the
+point: a URI is fire-and-forget, so without an ack a missing companion looks
+exactly like a working one — spawning the launcher always "succeeds". That is
+precisely how an earlier `/cops` managed to report success while opening
+nothing.
+
+Each window also writes `~/.copilot/porthole/companion-<pid>.json` while it runs,
+so the CLI can find a live companion without paying for `code --list-extensions`.
 
 Two details worth knowing, both found the hard way:
 
 - **`--open-url` needs the `.exe`, not the `bin/` shim.** Driving it through
-  `code-insiders.cmd` blocks and never delivers the URI. porthole resolves the
-  executable next to the shim.
+  `code-insiders.cmd` blocks and never delivers the URI.
 - **The extension activates on `onStartupFinished`, not just `onUri`.** `onUri`
   alone did not reliably wake it, so the handler would not be registered when
   the URI arrived.
+
+Without the companion nothing breaks: ranges degrade to a plain jump, and
+porthole says so rather than pretending.
 
 ## Diagrams
 
@@ -166,10 +243,20 @@ scripts are PowerShell; on macOS and Linux run them with `pwsh`.
 ```text
 porthole/
 ├── plugin.json
+├── porthole.example.json           # copy to ~/.copilot/porthole.json
 ├── extensions/porthole/
-│   └── extension.mjs               # deterministic /cops /open-session /vsdiff /goto
-├── vscode-extension/               # optional VS Code companion (range highlighting)
-│   ├── package.json  extension.js
+│   ├── extension.mjs               # commands, tools, registration
+│   └── lib/
+│       ├── config.mjs              # ~/.copilot/porthole.json, editor precedence
+│       ├── editor.mjs              # IDE locks, launcher resolution, detached launch
+│       ├── companion.mjs           # payload/ack transport to the VS Code companion
+│       ├── annotate.mjs            # annotations, symbol goto, the agent tools
+│       ├── doctor.mjs              # /porthole
+│       └── git.mjs
+├── vscode-extension/               # the VS Code companion
+│   ├── extension.js                # URI router
+│   ├── src/                        # transport presence reveal annotations symbols session views
+│   ├── media/                      # gutter icons, sidebar icon, sqlite reader
 │   └── README.md
 ├── skills/                         # agent-driven commands
 │   ├── diagram/  vsreview/  scratch/
