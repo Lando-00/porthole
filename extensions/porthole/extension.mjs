@@ -24,21 +24,24 @@
 //
 // Standing preferences live in ~/.copilot/porthole.json - see lib/config.mjs.
 
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { joinSession } from "@github/copilot-sdk/extension";
 
 import { config, copilotHome, reportConfigProblems } from "./lib/config.mjs";
-import { callCompanion, explain } from "./lib/companion.mjs";
+import {
+    annotate,
+    clearAnnotations,
+    goto,
+    parseTarget,
+    resolveFile,
+    tools as portholeTools,
+} from "./lib/annotate.mjs";
 import { doctor } from "./lib/doctor.mjs";
 import { git, projectRoot, isGitRepo } from "./lib/git.mjs";
-import {
-    launchEditor,
-    resolveEditorExe,
-    resolveEditorTarget,
-} from "./lib/editor.mjs";
+import { launchEditor, resolveEditorTarget } from "./lib/editor.mjs";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -78,21 +81,6 @@ function shortId(value, length = 8) {
 
 function writeJson(path, value) {
     writeFileSync(path, JSON.stringify(value, null, 2), { encoding: "utf8" });
-}
-
-/**
- * Asks the porthole companion VS Code extension to select and highlight a range.
- *
- * The VS Code CLI cannot select a range - `--goto` only places a cursor - so
- * this is delegated to the companion. Unlike a bare URI, the call is confirmed:
- * the caller learns whether the range was actually selected.
- */
-async function revealRange(file, startLine, endLine) {
-    return callCompanion(
-        "reveal",
-        { file, start: startLine, end: endLine || startLine },
-        { contextPath: dirname(file) },
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -297,90 +285,57 @@ async function handleVsDiff(session, ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// /goto
+// /goto, /annotate, /annotate-clear
 // ---------------------------------------------------------------------------
 
 async function handleGoto(session, ctx) {
     const raw = (ctx.args || "").trim();
     if (!raw) {
-        await session.log("porthole: usage - /goto <file>[:line[:column]]  or  /goto <file>:<start>-<end>");
-        return;
-    }
-
-    let filePart = raw;
-    let position = "";
-    let startLine = 0;
-    let endLine = 0;
-
-    // file:start-end selects a range; file:line[:col] just places a cursor.
-    const rangeMatch = /^(?<f>.+?):(?<s>\d+)-(?<e>\d+)$/.exec(raw);
-    const pointMatch = /^(?<f>.+?):(?<l>\d+)(?::(?<c>\d+))?$/.exec(raw);
-
-    if (rangeMatch && rangeMatch.groups.f.length > 1) {
-        filePart = rangeMatch.groups.f;
-        startLine = Number.parseInt(rangeMatch.groups.s, 10);
-        endLine = Number.parseInt(rangeMatch.groups.e, 10);
-        position = `:${startLine}`;
-    } else if (pointMatch && pointMatch.groups.f.length > 1) {
-        filePart = pointMatch.groups.f;
-        startLine = Number.parseInt(pointMatch.groups.l, 10);
-        position = pointMatch.groups.c ? `:${startLine}:${pointMatch.groups.c}` : `:${startLine}`;
-    }
-
-    const cwd = process.cwd();
-    let resolved = null;
-    if (isAbsolute(filePart) && existsSync(filePart)) {
-        resolved = filePart;
-    } else {
-        for (const base of [projectRoot(cwd), cwd]) {
-            const candidate = join(base, filePart);
-            if (existsSync(candidate)) {
-                resolved = candidate;
-                break;
-            }
-        }
-    }
-
-    if (!resolved) {
-        await session.log(`porthole: file not found - ${filePart}`);
-        return;
-    }
-
-    const target = resolveEditorTarget(dirname(resolved));
-    if (!target) {
-        await session.log("porthole: no editor found on PATH.");
-        return;
-    }
-
-    const where = target.connected ? ` in the connected ${target.ideName} window` : "";
-
-    // A real multi-line selection needs the companion extension; the CLI alone
-    // can only place a cursor.
-    if (endLine && endLine !== startLine) {
-        const result = await revealRange(resolved, startLine, endLine);
-        if (result.ok) {
-            await session.log(
-                `porthole: highlighted ${resolved} lines ${result.startLine}-${result.endLine}${where}.`,
-            );
-            return;
-        }
-
-        // Say what actually happened rather than claiming a highlight that
-        // never arrived, and still get the user to the right line.
-        launchEditor(session, target.command, [
-            "--reuse-window",
-            "--goto",
-            `${resolved}:${startLine}`,
-        ]);
         await session.log(
-            `porthole: opened ${resolved} at line ${startLine}${where}, without the range selection.\n` +
-                `  ${explain(result)}`,
+            "porthole: usage - /goto <file>[:line[:column]], /goto <file>:<start>-<end>, or /goto <symbolName>",
         );
         return;
     }
+    await session.log(await goto(session, raw));
+}
 
-    launchEditor(session, target.command, ["--reuse-window", "--goto", `${resolved}${position}`]);
-    await session.log(`porthole: opened ${resolved}${position}${where}.`);
+async function handleAnnotate(session, ctx) {
+    const raw = (ctx.args || "").trim();
+    if (!raw) {
+        await session.log("porthole: usage - /annotate <file>:<start>[-<end>] [message]");
+        return;
+    }
+
+    // Everything up to the first space is the location; the rest is the note.
+    const split = raw.indexOf(" ");
+    const locator = split === -1 ? raw : raw.slice(0, split);
+    const message = split === -1 ? "" : raw.slice(split + 1).trim();
+
+    const target = parseTarget(locator);
+    if (!target || target.kind === "symbol") {
+        await session.log(await goto(session, locator, message));
+        return;
+    }
+
+    const file = resolveFile(target.file);
+    if (!file) {
+        await session.log(`porthole: file not found - ${target.file}`);
+        return;
+    }
+
+    await session.log(
+        await annotate({
+            title: message || undefined,
+            annotations: [
+                {
+                    file,
+                    startLine: target.startLine,
+                    endLine: target.endLine || target.startLine,
+                    message,
+                },
+            ],
+        }),
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -409,8 +364,20 @@ const session = await joinSession({
         },
         {
             name: "goto",
-            description: "Open a file in VS Code: /goto <file>[:line[:col]] or <file>:<start>-<end> to highlight a range",
+            description:
+                "Open a file in VS Code: /goto <file>[:line[:col]], <file>:<start>-<end> to highlight a range, or a symbol name",
             handler: (ctx) => handleGoto(session, ctx),
+        },
+        {
+            name: "annotate",
+            description:
+                "Annotate code in VS Code: /annotate <file>:<start>[-<end>] [message], or a symbol name",
+            handler: (ctx) => handleAnnotate(session, ctx),
+        },
+        {
+            name: "annotate-clear",
+            description: "Remove every porthole annotation from VS Code",
+            handler: async () => session.log(await clearAnnotations()),
         },
         {
             name: "porthole",
@@ -419,6 +386,7 @@ const session = await joinSession({
             handler: (ctx) => doctor(session, ctx),
         },
     ],
+    tools: portholeTools(() => session),
 });
 
 
