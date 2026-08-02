@@ -8,17 +8,43 @@ diagrams, files at a line, scratch notes — **in the window you already have op
 
 ## Commands
 
+Two kinds, deliberately:
+
+**Deterministic** — real extension commands. The CLI calls a handler directly:
+same behaviour every time, no model in the loop, no tokens spent.
+
 | Command | What it does |
 |---|---|
-| `/open-session` · `/cops` | Open the project + current session folder together |
-| `/vsdiff` | Open diffs: uncommitted, staged, a commit, a range, or two files |
+| `/cops` · `/open-session` | Open this worktree + the current session folder in one workspace |
+| `/vsdiff` | Diffs: no args = uncommitted; or a commit, a range, `staged`, or two file paths |
+| `/goto <file:line:col>` | Jump to a position |
+
+**Agent-driven** — skills, where interpretation is the point.
+
+| Command | What it does |
+|---|---|
+| `/diagram` | You describe it, Copilot writes the mermaid, it opens **rendered** |
 | `/vsreview` | Open every file changed on a branch as diffs |
-| `/diagram` | Write a mermaid diagram and open it **rendered** |
-| `/goto` | Open a file at `line:col` |
 | `/scratch` | Create/open a scratch note in the session folder |
 
-> `/diff` and `/review` are already built-in Copilot CLI commands, so these are
-> named `/vsdiff` and `/vsreview` to avoid colliding with them.
+> `/diff` and `/review` are already built-in Copilot CLI commands, hence
+> `/vsdiff` and `/vsreview`.
+
+### Why the split
+
+A skill is a markdown file of instructions: Copilot reads it, then decides what
+to run. That flexibility is essential for `/diagram` — something has to author
+the mermaid from a sentence. It is pure overhead for `/cops`, which always does
+exactly one thing.
+
+So `/cops`, `/goto` and `/vsdiff` are registered by the bundled extension as
+`CommandDefinition` handlers instead. The extension is plain Node with no
+PowerShell dependency, and its command handler receives the real `sessionId`,
+so the session folder is resolved exactly rather than guessed at.
+
+> **Extension commands need the TUI.** They are registered with the interactive
+> session, so in a non-interactive `copilot -p "/cops"` run the text is treated
+> as an ordinary prompt. Use them from an interactive session.
 
 ## Install
 
@@ -114,11 +140,11 @@ scripts are PowerShell; on macOS and Linux run them with `pwsh`.
 ```text
 porthole/
 ├── plugin.json
-├── skills/                         # one folder per slash command
-│   ├── open-session/  cops/
-│   ├── vsdiff/        vsreview/
-│   └── diagram/       goto/        scratch/
-├── scripts/
+├── extensions/porthole/
+│   └── extension.mjs               # deterministic /cops /open-session /vsdiff /goto
+├── skills/                         # agent-driven commands
+│   ├── diagram/  vsreview/  scratch/
+├── scripts/                        # standalone PowerShell equivalents
 │   ├── common.ps1                  # IDE detection, editor routing, git helpers
 │   ├── open-session.ps1  open-session.sh
 │   ├── vsdiff.ps1     vsreview.ps1
@@ -128,6 +154,10 @@ porthole/
 └── .github/plugin/marketplace.json # this repo is its own marketplace
 ```
 
+The extension and the scripts implement the same behaviour independently: the
+extension is what the slash commands use, the scripts are for running by hand
+(and for the agent-driven skills).
+
 ## Local development
 
 Components are cached at install time, so reinstall to pick up edits:
@@ -136,10 +166,20 @@ Components are cached at install time, so reinstall to pick up edits:
 copilot plugin install porthole@porthole-marketplace
 ```
 
+**Extensions are discovered at session startup.** After reinstalling, start a
+*new* session — `extensions_reload` does not pick up a newly installed plugin
+extension in an already-running session.
+
 > **Windows caveat (CLI 1.0.77):** reinstalling over an existing *direct* install
 > fails with `Access is denied. (os error 5)`, and `copilot plugin uninstall`
-> fails the same way. Marketplace installs are unaffected. If you hit it, delete
-> `~/.copilot/installed-plugins/_direct/<dir>` and reinstall.
+> fails the same way. `marketplace remove --force` also leaves the cached plugin
+> directory behind, which makes the *next* install fail the same way even though
+> the plugin no longer appears in `plugin list`. If you hit it:
+>
+> ```powershell
+> Remove-Item "$env:USERPROFILE\.copilot\installed-plugins\porthole-marketplace" -Recurse -Force
+> copilot plugin install porthole@porthole-marketplace
+> ```
 
 Or skip the cache entirely:
 
