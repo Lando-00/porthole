@@ -204,16 +204,58 @@ function resolveEditorTarget(contextPath) {
 }
 
 /**
- * Launches the editor fully detached. Waiting on a .cmd shim would block the
- * extension until the editor exits.
+ * Launches the editor fully detached.
+ *
+ * Windows needs care here:
+ *  - Node refuses to spawn a .cmd/.bat without a shell (EINVAL, since the
+ *    CVE-2024-27980 fix), and VS Code's launcher is `code-insiders.cmd`.
+ *  - With `shell: true`, Node concatenates the command and argv into a single
+ *    command line, so anything containing a space - such as
+ *    "C:\Program Files\Microsoft VS Code Insiders\bin\code-insiders.cmd" -
+ *    must be quoted or it is split at the space.
+ *
+ * Node runs `cmd.exe /d /s /c "<line>"`, and `/s` strips the outer quote pair,
+ * so pre-quoting every element is exactly right.
+ *
+ * Failures are reported rather than swallowed: a launcher that cannot start is
+ * otherwise invisible, because the handler has already logged success.
  */
-function launchEditor(command, args) {
-    const child = spawn(command, args, {
-        detached: true,
-        stdio: "ignore",
-        shell: isWindows, // .cmd/.bat shims need a shell on Windows
-        windowsHide: true,
+function launchEditor(session, command, args) {
+    let child;
+
+    if (isWindows) {
+        const line = [command, ...args].map((a) => `"${a}"`).join(" ");
+        child = spawn(line, [], {
+            detached: true,
+            stdio: ["ignore", "ignore", "pipe"],
+            shell: true,
+            windowsHide: true,
+        });
+    } else {
+        child = spawn(command, args, {
+            detached: true,
+            stdio: ["ignore", "ignore", "pipe"],
+        });
+    }
+
+    let stderr = "";
+    if (child.stderr) {
+        child.stderr.on("data", (d) => {
+            stderr += String(d);
+        });
+    }
+
+    child.on("error", (err) => {
+        void session.log(`porthole: could not launch the editor - ${err.message}`);
     });
+
+    child.on("close", (code) => {
+        if (code !== 0 && code !== null) {
+            const detail = stderr.trim().split(/\r?\n/)[0] || `exit code ${code}`;
+            void session.log(`porthole: the editor command failed - ${detail}`);
+        }
+    });
+
     child.unref();
 }
 
@@ -243,13 +285,13 @@ async function handleOpenSession(session, ctx) {
     // one on a generated workspace.
     if (target.connected) {
         if (sessionFolder) {
-            launchEditor(target.command, ["--reuse-window", "--add", sessionFolder]);
+            launchEditor(session, target.command, ["--reuse-window", "--add", sessionFolder]);
             await session.log(
                 `porthole: added the session folder to the connected ${target.ideName} window.\n` +
                     `  project: ${root}\n  session: ${sessionFolder}`,
             );
         } else {
-            launchEditor(target.command, ["--reuse-window", "--add", root]);
+            launchEditor(session, target.command, ["--reuse-window", "--add", root]);
             await session.log(
                 `porthole: no session folder on disk yet; added the project to the connected ${target.ideName} window.`,
             );
@@ -279,7 +321,7 @@ async function handleOpenSession(session, ctx) {
     const wsFile = join(outDir, `${safeName(name)}-${shortId(ctx.sessionId)}.code-workspace`);
     writeJson(wsFile, workspace);
 
-    launchEditor(target.command, [wsFile]);
+    launchEditor(session, target.command, [wsFile]);
 
     await session.log(
         sessionFolder
@@ -336,7 +378,7 @@ async function handleVsDiff(session, ctx) {
             await session.log("porthole: no editor found on PATH.");
             return;
         }
-        launchEditor(target.command, ["--reuse-window", "--diff", resolve(parts[0]), resolve(parts[1])]);
+        launchEditor(session, target.command, ["--reuse-window", "--diff", resolve(parts[0]), resolve(parts[1])]);
         await session.log(`porthole: opened a diff of ${parts[0]} and ${parts[1]}.`);
         return;
     }
@@ -410,7 +452,7 @@ async function handleVsDiff(session, ctx) {
         const right = writeSide(repoRoot, rel, rightRef, fileDir, "AFTER") ??
             emptyPlaceholder(fileDir, "AFTER", rel);
 
-        launchEditor(target.command, ["--reuse-window", "--diff", left, right]);
+        launchEditor(session, target.command, ["--reuse-window", "--diff", left, right]);
     }
 
     const where = target.connected ? ` in the connected ${target.ideName} window` : "";
@@ -465,7 +507,7 @@ async function handleGoto(session, ctx) {
         return;
     }
 
-    launchEditor(target.command, ["--reuse-window", "--goto", `${resolved}${position}`]);
+    launchEditor(session, target.command, ["--reuse-window", "--goto", `${resolved}${position}`]);
 
     const where = target.connected ? ` in the connected ${target.ideName} window` : "";
     await session.log(`porthole: opened ${resolved}${position}${where}.`);
