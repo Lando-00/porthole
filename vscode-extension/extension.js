@@ -22,6 +22,7 @@ const transport = require("./src/transport");
 const presence = require("./src/presence");
 const reveal = require("./src/reveal");
 const annotations = require("./src/annotations");
+const symbols = require("./src/symbols");
 
 const VERSION = require("./package.json").version;
 
@@ -29,7 +30,7 @@ const VERSION = require("./package.json").version;
 const KNOWN = new Set(["", "reveal", "clear", "ping", "annotate", "annotate-clear", "symbol"]);
 
 /** Routes that are implemented elsewhere and land later in the plan. */
-const PLANNED = new Set(["symbol"]);
+const PLANNED = new Set();
 
 /** Routes that carry no payload, so a missing payload file is not an error. */
 const PAYLOAD_OPTIONAL = new Set(["ping", "clear", "annotate-clear"]);
@@ -52,6 +53,12 @@ async function dispatch(route, payload) {
 
         case "annotate-clear":
             return annotations.clear();
+
+        case "symbol":
+            return symbols.symbol(payload, {
+                annotate: annotations.annotate,
+                reveal: reveal.reveal,
+            });
 
         default:
             if (PLANNED.has(route)) {
