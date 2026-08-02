@@ -32,6 +32,7 @@ import { joinSession } from "@github/copilot-sdk/extension";
 
 import { config, copilotHome, reportConfigProblems } from "./lib/config.mjs";
 import { callCompanion, explain } from "./lib/companion.mjs";
+import { doctor } from "./lib/doctor.mjs";
 import { git, projectRoot, isGitRepo } from "./lib/git.mjs";
 import {
     launchEditor,
@@ -410,6 +411,12 @@ const session = await joinSession({
             name: "goto",
             description: "Open a file in VS Code: /goto <file>[:line[:col]] or <file>:<start>-<end> to highlight a range",
             handler: (ctx) => handleGoto(session, ctx),
+        },
+        {
+            name: "porthole",
+            description:
+                "Diagnose porthole: config, editors, connected windows, the companion extension, session and git",
+            handler: (ctx) => doctor(session, ctx),
         },
     ],
 });
