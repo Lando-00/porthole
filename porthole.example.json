@@ -1,0 +1,18 @@
+{
+  "//": "Copy to ~/.copilot/porthole.json. Every key is optional.",
+
+  "//editor": "insiders | stable | cursor | windsurf | auto | an absolute path to a launcher",
+  "editor": "insiders",
+
+  "//preferConnectedIde": "Drive the editor window Copilot CLI is already connected to instead of opening another one. Ignored when 'editor' is set to anything but auto.",
+  "preferConnectedIde": true,
+
+  "//workspaceDir": "Where generated .code-workspace and diff files go. null uses the temp folder.",
+  "workspaceDir": null,
+
+  "//companionTimeoutMs": "How long to wait for the porthole companion VS Code extension to reply before giving up.",
+  "companionTimeoutMs": 2000,
+
+  "//goto": "symbolFallback scans for a definition when the editor's language server cannot resolve a name.",
+  "goto": { "symbolFallback": true }
+}

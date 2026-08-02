@@ -63,6 +63,40 @@ function Resolve-SessionFolder {
     return $null
 }
 
+function Get-PortholeConfig {
+    <#
+        Reads ~/.copilot/porthole.json, the same standing preferences the CLI
+        extension honours, so /diagram, /scratch and /vsreview do not open a
+        different editor from /cops.
+
+        A broken config must never throw here: these scripts are the fallback
+        path, and failing on a typo would leave nothing working.
+    #>
+    $path = Join-Path (Get-CopilotHome) 'porthole.json'
+    $defaults = [pscustomobject]@{
+        Editor             = 'auto'
+        PreferConnectedIde = $true
+        WorkspaceDir       = $null
+    }
+    if (-not (Test-Path -LiteralPath $path)) { return $defaults }
+
+    try {
+        $raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop | ConvertFrom-Json
+    }
+    catch { return $defaults }
+
+    if ($raw.PSObject.Properties.Name -contains 'editor' -and $raw.editor -is [string]) {
+        $defaults.Editor = $raw.editor
+    }
+    if ($raw.PSObject.Properties.Name -contains 'preferConnectedIde' -and $raw.preferConnectedIde -is [bool]) {
+        $defaults.PreferConnectedIde = $raw.preferConnectedIde
+    }
+    if ($raw.PSObject.Properties.Name -contains 'workspaceDir' -and $raw.workspaceDir -is [string]) {
+        $defaults.WorkspaceDir = $raw.workspaceDir
+    }
+    return $defaults
+}
+
 function Resolve-EditorCommand {
     param([string]$Preference = 'auto')
 
@@ -74,11 +108,25 @@ function Resolve-EditorCommand {
             if ($insiders) { return $insiders.Source }
             throw "VS Code Insiders ('code-insiders') was not found on PATH."
         }
-        'code' {
+        { $_ -in @('code', 'stable') } {
             if ($stable) { return $stable.Source }
             throw "VS Code ('code') was not found on PATH."
         }
+        'cursor' {
+            $cursor = Get-Command 'cursor' -ErrorAction SilentlyContinue
+            if ($cursor) { return $cursor.Source }
+            throw "Cursor ('cursor') was not found on PATH."
+        }
+        'windsurf' {
+            $windsurf = Get-Command 'windsurf' -ErrorAction SilentlyContinue
+            if ($windsurf) { return $windsurf.Source }
+            throw "Windsurf ('windsurf') was not found on PATH."
+        }
         default {
+            # An explicit path is taken as-is.
+            if ($Preference -and $Preference -ne 'auto' -and (Test-Path -LiteralPath $Preference)) {
+                return $Preference
+            }
             # Insiders is the preferred default.
             if ($insiders) { return $insiders.Source }
             if ($stable) { return $stable.Source }
@@ -128,23 +176,25 @@ function Get-IdeEditorCommand {
     <#
         Maps a Copilot ideName to a launcher on PATH. Returns $null when the IDE
         has no usable CLI, so callers can fall back.
+
+        The lock file reports a display name - "Visual Studio Code - Insiders" -
+        so matching has to be on substrings. An exact-match table silently never
+        fired, which meant window reuse never happened.
     #>
     param([Parameter(Mandatory)][string]$IdeName)
 
-    $map = @{
-        'vscode-insiders' = @('code-insiders')
-        'vscode'          = @('code')
-        'cursor'          = @('cursor')
-        'windsurf'        = @('windsurf')
+    $name = $IdeName.ToLower()
+    $candidate = switch -Regex ($name) {
+        'insiders'                   { 'code-insiders'; break }
+        'cursor'                     { 'cursor'; break }
+        'windsurf'                   { 'windsurf'; break }
+        'visual studio code|vscode'  { 'code'; break }
+        default                      { $null }
     }
+    if (-not $candidate) { return $null }
 
-    $candidates = $map[$IdeName.ToLower()]
-    if (-not $candidates) { return $null }
-
-    foreach ($c in $candidates) {
-        $cmd = Get-Command $c -ErrorAction SilentlyContinue
-        if ($cmd) { return $cmd.Source }
-    }
+    $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
     return $null
 }
 
@@ -199,6 +249,13 @@ function Resolve-EditorTarget {
         [string]$ContextPath
     )
 
+    $config = Get-PortholeConfig
+
+    # PORTHOLE_EDITOR beats the config, which beats the connected window: a
+    # standing preference is a deliberate choice and should be honoured.
+    if ($Preference -eq 'auto' -and $env:PORTHOLE_EDITOR) { $Preference = $env:PORTHOLE_EDITOR }
+    if ($Preference -eq 'auto' -and $config.Editor -ne 'auto') { $Preference = $config.Editor }
+
     if ($Preference -ne 'auto') {
         return [pscustomobject]@{
             Command          = Resolve-EditorCommand -Preference $Preference
@@ -209,7 +266,7 @@ function Resolve-EditorTarget {
         }
     }
 
-    $ides = @(Get-ConnectedIdes)
+    $ides = if ($config.PreferConnectedIde) { @(Get-ConnectedIdes) } else { @() }
     if ($ides.Count -gt 0) {
         $chosen = $null
         $matched = $null

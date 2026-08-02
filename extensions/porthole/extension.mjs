@@ -19,26 +19,28 @@
 // file works on Windows, macOS and Linux.
 //
 // Environment overrides:
-//   PORTHOLE_EDITOR   force an editor: "insiders" | "code" | an absolute path
+//   PORTHOLE_EDITOR   force an editor: "insiders" | "stable" | an absolute path
 //   COPILOT_HOME      Copilot config dir (default: ~/.copilot)
+//
+// Standing preferences live in ~/.copilot/porthole.json - see lib/config.mjs.
 
-import { spawn, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { joinSession } from "@github/copilot-sdk/extension";
 
-const isWindows = process.platform === "win32";
+import { config, copilotHome, reportConfigProblems } from "./lib/config.mjs";
+import { git, projectRoot, isGitRepo } from "./lib/git.mjs";
+import {
+    launchEditor,
+    resolveEditorExe,
+    resolveEditorTarget,
+} from "./lib/editor.mjs";
 
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
-
-function copilotHome() {
-    const configured = process.env.COPILOT_HOME;
-    if (configured && existsSync(configured)) return configured;
-    return join(homedir(), ".copilot");
-}
 
 /**
  * The session folder for a given session id.
@@ -52,8 +54,13 @@ function sessionFolderFor(sessionId) {
     return existsSync(dir) ? dir : null;
 }
 
+/**
+ * Where generated files go. Configurable, because a workspace file in the temp
+ * folder is invisible to backups and easy to lose track of.
+ */
 function portholeTempDir(leaf) {
-    const dir = join(tmpdir(), leaf);
+    const configured = config().workspaceDir;
+    const dir = configured ? join(configured, leaf) : join(tmpdir(), leaf);
     mkdirSync(dir, { recursive: true });
     return dir;
 }
@@ -67,175 +74,15 @@ function shortId(value, length = 8) {
     return String(value).slice(0, length);
 }
 
-// ---------------------------------------------------------------------------
-// git
-// ---------------------------------------------------------------------------
-
-function git(args, cwd) {
-    try {
-        return execFileSync("git", args, {
-            cwd,
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "ignore"],
-        }).trim();
-    } catch {
-        return null;
-    }
-}
-
-/**
- * --show-toplevel from the cwd returns the *worktree* root, so a linked
- * worktree resolves to itself rather than to the main repository.
- */
-function projectRoot(cwd) {
-    const top = git(["rev-parse", "--show-toplevel"], cwd);
-    return top ? resolve(top) : resolve(cwd);
-}
-
-function isGitRepo(cwd) {
-    return git(["rev-parse", "--git-dir"], cwd) !== null;
-}
-
-// ---------------------------------------------------------------------------
-// Editor selection
-// ---------------------------------------------------------------------------
-
-function whichEditor(name) {
-    const probe = isWindows ? "where" : "which";
-    try {
-        const out = execFileSync(probe, [name], {
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "ignore"],
-        }).trim();
-        const first = out.split(/\r?\n/).find(Boolean);
-        return first || null;
-    } catch {
-        return null;
-    }
-}
-
-/**
- * Reads the IDE lock files the CLI writes for each connected editor window.
- * Only locks whose process is still alive count, matching the host's own rule.
- */
-function connectedIdes() {
-    const ideDir = join(copilotHome(), "ide");
-    if (!existsSync(ideDir)) return [];
-
-    const found = [];
-    for (const entry of readdirSync(ideDir)) {
-        if (!entry.endsWith(".lock")) continue;
-        try {
-            const info = JSON.parse(readFileSync(join(ideDir, entry), "utf8"));
-            if (!info.pid) continue;
-            try {
-                process.kill(info.pid, 0); // liveness probe only
-            } catch {
-                continue;
-            }
-            found.push({
-                ideName: String(info.ideName || ""),
-                pid: info.pid,
-                workspaceFolders: Array.isArray(info.workspaceFolders) ? info.workspaceFolders : [],
-            });
-        } catch {
-            // Unreadable or malformed lock: skip it.
-        }
-    }
-    return found;
-}
-
-const IDE_LAUNCHERS = {
-    "vscode-insiders": "code-insiders",
-    vscode: "code",
-    cursor: "cursor",
-    windsurf: "windsurf",
-};
-
-function pathsRelated(a, b) {
-    const x = a.replace(/[\\/]+$/, "").toLowerCase();
-    const y = b.replace(/[\\/]+$/, "").toLowerCase();
-    return x === y || x.startsWith(y + sep.toLowerCase()) || y.startsWith(x + sep.toLowerCase());
-}
-
-/**
- * Picks the editor to drive. A connected IDE window always wins, so commands
- * land in the window the user is already looking at instead of spawning
- * another instance. PORTHOLE_EDITOR overrides everything.
- */
-function resolveEditorTarget(contextPath) {
-    const override = process.env.PORTHOLE_EDITOR;
-    if (override) {
-        if (override === "insiders" || override === "code") {
-            const cmd = whichEditor(override === "insiders" ? "code-insiders" : "code");
-            if (cmd) return { command: cmd, connected: false, ideName: null };
-        } else if (existsSync(override)) {
-            return { command: override, connected: false, ideName: null };
-        }
-    }
-
-    const ides = connectedIdes();
-    if (ides.length > 0) {
-        let chosen = null;
-        if (contextPath) {
-            for (const ide of ides) {
-                if (ide.workspaceFolders.some((wf) => wf && pathsRelated(contextPath, String(wf)))) {
-                    chosen = ide;
-                    break;
-                }
-            }
-        }
-        if (!chosen) chosen = ides[0];
-
-        const launcher = IDE_LAUNCHERS[chosen.ideName.toLowerCase()];
-        if (launcher) {
-            const cmd = whichEditor(launcher);
-            if (cmd) return { command: cmd, connected: true, ideName: chosen.ideName };
-        }
-    }
-
-    // Insiders is the preferred default.
-    const insiders = whichEditor("code-insiders");
-    if (insiders) return { command: insiders, connected: false, ideName: null };
-    const stable = whichEditor("code");
-    if (stable) return { command: stable, connected: false, ideName: null };
-
-    return null;
-}
-
-/**
- * Finds the editor executable that sits beside the `bin/` launcher shim.
- *
- * `--open-url` must go to the .exe: the bin/*.cmd shim blocks without ever
- * delivering the URI (verified on VS Code Insiders 1.132). Everything else is
- * happy with the shim.
- *
- * Layout:  <install>\bin\code-insiders.cmd  ->  <install>\Code - Insiders.exe
- */
-function resolveEditorExe(launcherPath) {
-    if (!isWindows) return launcherPath;
-
-    const binDir = dirname(launcherPath);
-    const installRoot = dirname(binDir);
-    const candidates = [
-        "Code - Insiders.exe",
-        "Code.exe",
-        "Cursor.exe",
-        "Windsurf.exe",
-    ];
-    for (const name of candidates) {
-        const candidate = join(installRoot, name);
-        if (existsSync(candidate)) return candidate;
-    }
-    return null;
+function writeJson(path, value) {
+    writeFileSync(path, JSON.stringify(value, null, 2), { encoding: "utf8" });
 }
 
 /**
  * Asks the porthole companion VS Code extension to select and highlight a range.
  *
  * The VS Code CLI cannot select a range - `--goto` only places a cursor - so
- * this is delegated to the companion extension over its URI handler. Returns
- * false when the companion cannot be driven, so callers can fall back.
+ * this is delegated to the companion extension over its URI handler.
  */
 function revealRange(session, launcherPath, file, startLine, endLine) {
     const exe = resolveEditorExe(launcherPath);
@@ -261,71 +108,12 @@ function revealRange(session, launcherPath, file, startLine, endLine) {
     return true;
 }
 
-/**
- * Launches the editor fully detached.
- *
- * Windows needs care here:
- *  - Node refuses to spawn a .cmd/.bat without a shell (EINVAL, since the
- *    CVE-2024-27980 fix), and VS Code's launcher is `code-insiders.cmd`.
- *  - With `shell: true`, Node concatenates the command and argv into a single
- *    command line, so anything containing a space - such as
- *    "C:\Program Files\Microsoft VS Code Insiders\bin\code-insiders.cmd" -
- *    must be quoted or it is split at the space.
- *
- * Node runs `cmd.exe /d /s /c "<line>"`, and `/s` strips the outer quote pair,
- * so pre-quoting every element is exactly right.
- *
- * Failures are reported rather than swallowed: a launcher that cannot start is
- * otherwise invisible, because the handler has already logged success.
- */
-function launchEditor(session, command, args) {
-    let child;
-
-    if (isWindows) {
-        const line = [command, ...args].map((a) => `"${a}"`).join(" ");
-        child = spawn(line, [], {
-            detached: true,
-            stdio: ["ignore", "ignore", "pipe"],
-            shell: true,
-            windowsHide: true,
-        });
-    } else {
-        child = spawn(command, args, {
-            detached: true,
-            stdio: ["ignore", "ignore", "pipe"],
-        });
-    }
-
-    let stderr = "";
-    if (child.stderr) {
-        child.stderr.on("data", (d) => {
-            stderr += String(d);
-        });
-    }
-
-    child.on("error", (err) => {
-        void session.log(`porthole: could not launch the editor - ${err.message}`);
-    });
-
-    child.on("close", (code) => {
-        if (code !== 0 && code !== null) {
-            const detail = stderr.trim().split(/\r?\n/)[0] || `exit code ${code}`;
-            void session.log(`porthole: the editor command failed - ${detail}`);
-        }
-    });
-
-    child.unref();
-}
-
-function writeJson(path, value) {
-    writeFileSync(path, JSON.stringify(value, null, 2), { encoding: "utf8" });
-}
-
 // ---------------------------------------------------------------------------
 // /cops, /open-session
 // ---------------------------------------------------------------------------
 
 async function handleOpenSession(session, ctx) {
+    await reportConfigProblems(session);
     const cwd = process.cwd();
     const root = projectRoot(cwd);
     const name = basename(root);
@@ -634,4 +422,5 @@ const session = await joinSession({
         },
     ],
 });
-
+
+
