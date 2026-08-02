@@ -38,9 +38,27 @@ function describe(vscode, version) {
         uriScheme: vscode.env.uriScheme,
         appName: vscode.env.appName,
         appHost: vscode.env.appHost,
+        // Whether the editor's own runtime can read session.db, or whether the
+        // sidebar has to fall back to spawning `node`. Worth knowing from the
+        // outside, because it is the one capability that varies by build.
+        hostSqlite: hasHostSqlite(),
         workspaceFolders: (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath),
         updatedAt: new Date().toISOString(),
     };
+}
+
+let hostSqlite = null;
+
+function hasHostSqlite() {
+    if (hostSqlite === null) {
+        try {
+            require("node:sqlite");
+            hostSqlite = true;
+        } catch {
+            hostSqlite = false;
+        }
+    }
+    return hostSqlite;
 }
 
 function write(vscode, version) {

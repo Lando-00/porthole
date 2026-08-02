@@ -23,6 +23,7 @@ const presence = require("./src/presence");
 const reveal = require("./src/reveal");
 const annotations = require("./src/annotations");
 const symbols = require("./src/symbols");
+const views = require("./src/views");
 
 const VERSION = require("./package.json").version;
 
@@ -121,6 +122,7 @@ function activate(context) {
 
     presence.start(vscode, context, VERSION);
     annotations.activate(context);
+    views.activate(context);
 
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
