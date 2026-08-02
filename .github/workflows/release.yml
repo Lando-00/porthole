@@ -1,0 +1,67 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate the plugin
+        run: node tests/validate.mjs
+
+      # A tag that disagrees with the manifests would publish a release nobody
+      # can reproduce, so refuse rather than guess.
+      - name: Check the tag matches plugin.json
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          MANIFEST=$(node -p "require('./plugin.json').version")
+          if [ "$TAG" != "$MANIFEST" ]; then
+            echo "tag $GITHUB_REF_NAME does not match plugin.json version $MANIFEST" >&2
+            exit 1
+          fi
+          echo "version=$MANIFEST" >> "$GITHUB_ENV"
+          echo "companion=$(node -p "require('./vscode-extension/package.json').version")" >> "$GITHUB_ENV"
+
+      - name: Package the companion extension
+        working-directory: vscode-extension
+        run: npm run package
+
+      - name: Name the VSIX after its version
+        run: mv vscode-extension/porthole-companion.vsix "porthole-companion-${COMPANION}.vsix"
+        env:
+          COMPANION: ${{ env.companion }}
+
+      # No VS Code Marketplace publish: the companion is installed from the
+      # release asset, which needs no publisher account and no PAT.
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: porthole-companion-${{ env.companion }}.vsix
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            ```shell
+            copilot plugin marketplace add Lando-00/porthole
+            copilot plugin install porthole@porthole-marketplace
+            ```
+
+            Then the companion VS Code extension, for annotations, range
+            selection, symbol lookup and the sidebar:
+
+            ```shell
+            code-insiders --install-extension porthole-companion-${{ env.companion }}.vsix
+            ```
+
+            Run `/porthole` in an interactive session to check the install.

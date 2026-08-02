@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Manifests, version drift, skill frontmatter, and a syntax check of every
+      # source file - none of which a runtime test would catch, because the
+      # plugin only ever loads inside the CLI.
+      - name: Validate the plugin
+        run: node tests/validate.mjs
+
+      # Packaging is the only real build step, and it catches things the
+      # validator cannot see, such as a file excluded by .vscodeignore that the
+      # extension needs at runtime.
+      - name: Package the companion extension
+        working-directory: vscode-extension
+        run: npm run package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: porthole-companion-vsix
+          path: vscode-extension/porthole-companion.vsix
+          if-no-files-found: error
