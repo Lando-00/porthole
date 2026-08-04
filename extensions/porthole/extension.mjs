@@ -39,7 +39,9 @@ import {
     resolveFile,
     tools as portholeTools,
 } from "./lib/annotate.mjs";
-import { doctor } from "./lib/doctor.mjs";
+import { doctor, pluginVersion } from "./lib/doctor.mjs";
+import * as endpoint from "./lib/endpoint.mjs";
+import * as outbox from "./lib/outbox.mjs";
 import { git, projectRoot, isGitRepo } from "./lib/git.mjs";
 import { launchEditor, resolveEditorTarget } from "./lib/editor.mjs";
 
@@ -342,51 +344,73 @@ async function handleAnnotate(session, ctx) {
 // Registration
 // ---------------------------------------------------------------------------
 
+/**
+ * Refreshes presence on every command.
+ *
+ * `ctx.sessionId` is exact and only exists here, so this is where a session id
+ * that was unknown at load finally gets filled in.
+ */
+const withPresence = (handler) => (ctx) => {
+    endpoint.touch(session, ctx);
+    return handler(ctx);
+};
+
 const session = await joinSession({
     commands: [
         {
             name: "cops",
             description:
                 "Open this worktree + the current Copilot session folder in one VS Code workspace",
-            handler: (ctx) => handleOpenSession(session, ctx),
+            handler: withPresence((ctx) => handleOpenSession(session, ctx)),
         },
         {
             name: "open-session",
             description:
                 "Open this worktree + the current Copilot session folder in one VS Code workspace",
-            handler: (ctx) => handleOpenSession(session, ctx),
+            handler: withPresence((ctx) => handleOpenSession(session, ctx)),
         },
         {
             name: "vsdiff",
             description:
                 "Open diffs in VS Code: no args = uncommitted, or a commit, a range, 'staged', or two file paths",
-            handler: (ctx) => handleVsDiff(session, ctx),
+            handler: withPresence((ctx) => handleVsDiff(session, ctx)),
         },
         {
             name: "goto",
             description:
                 "Open a file in VS Code: /goto <file>[:line[:col]], <file>:<start>-<end> to highlight a range, or a symbol name",
-            handler: (ctx) => handleGoto(session, ctx),
+            handler: withPresence((ctx) => handleGoto(session, ctx)),
         },
         {
             name: "annotate",
             description:
                 "Annotate code in VS Code: /annotate <file>:<start>[-<end>] [message], or a symbol name",
-            handler: (ctx) => handleAnnotate(session, ctx),
+            handler: withPresence((ctx) => handleAnnotate(session, ctx)),
         },
         {
             name: "annotate-clear",
             description: "Remove every porthole annotation from VS Code",
-            handler: async () => session.log(await clearAnnotations()),
+            handler: withPresence(async () => session.log(await clearAnnotations())),
         },
         {
             name: "porthole",
             description:
                 "Diagnose porthole: config, editors, connected windows, the companion extension, session and git",
-            handler: (ctx) => doctor(session, ctx),
+            handler: withPresence((ctx) => doctor(session, ctx)),
         },
     ],
     tools: portholeTools(() => session),
 });
+
+// ---------------------------------------------------------------------------
+// The reverse channel
+// ---------------------------------------------------------------------------
+
+// Publishing presence is what makes this session addressable from VS Code, and
+// the listener is what makes "Send to Copilot" arrive. Both start at load
+// rather than on first command, because the endpoint id - unlike the session
+// id - is known immediately.
+endpoint.start(session, { version: pluginVersion(), projectRoot: projectRoot(process.cwd()) });
+outbox.start(session);
 
 

@@ -69,7 +69,7 @@ function versions(report, ctx) {
     if (ctx?.sessionId) report.add("info", `session       ${ctx.sessionId}`);
 }
 
-function pluginVersion() {
+export function pluginVersion() {
     // The manifest sits two levels above lib/, whether the plugin is running
     // from the repo or from the installed cache.
     const candidates = [

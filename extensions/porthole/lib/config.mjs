@@ -26,6 +26,9 @@ export const DEFAULTS = {
     preferConnectedIde: true,
     workspaceDir: null,
     companionTimeoutMs: 2000,
+    // How a selection sent from VS Code is delivered. "enqueue" waits for the
+    // current turn to finish; "immediate" steers mid-turn.
+    sendMode: "enqueue",
     goto: { symbolFallback: true },
 };
 
