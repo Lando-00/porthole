@@ -13,6 +13,7 @@ const vscode = require("vscode");
 
 const { diag } = require("./log");
 const { clampRange } = require("./reveal");
+const diagnostics = require("./diagnostics");
 
 const SEVERITIES = ["info", "warn", "error", "note"];
 
@@ -200,6 +201,7 @@ async function annotate(payload) {
 
     applyToAllVisible();
     updateStatusBar();
+    diagnostics.publish(ordered);
 
     diag(`annotate ${accepted.length} accepted, ${rejected.length} rejected`);
 
@@ -255,6 +257,7 @@ function clear() {
     }
     clearState();
     updateStatusBar();
+    diagnostics.clear();
     return { ok: true, total: 0 };
 }
 

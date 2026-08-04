@@ -190,6 +190,7 @@ no payload blames the route, not the missing file.
     }
   ],
   "counts": { "error": 3, "warning": 7, "info": 0, "hint": 0 },
+  "annotations": 4,         // porthole's own entries, excluded from `files`
   "truncated": true,        // entries were dropped to honour `limit`
   "scanned": 42             // files considered
 }

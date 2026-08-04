@@ -22,19 +22,29 @@ const transport = require("./src/transport");
 const presence = require("./src/presence");
 const reveal = require("./src/reveal");
 const annotations = require("./src/annotations");
+const diagnostics = require("./src/diagnostics");
 const symbols = require("./src/symbols");
 const views = require("./src/views");
 
 const VERSION = require("./package.json").version;
 
 /** Every route this build answers, so an unknown one is reported as such. */
-const KNOWN = new Set(["", "reveal", "clear", "ping", "annotate", "annotate-clear", "symbol"]);
+const KNOWN = new Set([
+    "",
+    "reveal",
+    "clear",
+    "ping",
+    "annotate",
+    "annotate-clear",
+    "symbol",
+    "diagnostics",
+]);
 
 /** Routes that are implemented elsewhere and land later in the plan. */
 const PLANNED = new Set();
 
 /** Routes that carry no payload, so a missing payload file is not an error. */
-const PAYLOAD_OPTIONAL = new Set(["ping", "clear", "annotate-clear"]);
+const PAYLOAD_OPTIONAL = new Set(["ping", "clear", "annotate-clear", "diagnostics"]);
 
 async function dispatch(route, payload) {
     switch (route) {
@@ -60,6 +70,9 @@ async function dispatch(route, payload) {
                 annotate: annotations.annotate,
                 reveal: reveal.reveal,
             });
+
+        case "diagnostics":
+            return diagnostics.read(payload);
 
         default:
             if (PLANNED.has(route)) {
@@ -121,6 +134,9 @@ function activate(context) {
     transport.sweep();
 
     presence.start(vscode, context, VERSION);
+    // Before annotations: publishing an annotation needs the collection to
+    // exist already.
+    diagnostics.activate(context);
     annotations.activate(context);
     views.activate(context);
 
