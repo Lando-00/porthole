@@ -80,6 +80,14 @@
       {
         "command": "porthole.tour.exit",
         "title": "porthole: Exit tour"
+      },
+      {
+        "command": "porthole.saveReview",
+        "title": "porthole: Save review"
+      },
+      {
+        "command": "porthole.loadReview",
+        "title": "porthole: Load review"
       }
     ],
     "viewsContainers": {

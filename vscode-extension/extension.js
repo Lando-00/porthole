@@ -24,6 +24,7 @@ const reveal = require("./src/reveal");
 const annotations = require("./src/annotations");
 const diagnostics = require("./src/diagnostics");
 const tour = require("./src/tour");
+const reviews = require("./src/reviews");
 const symbols = require("./src/symbols");
 const views = require("./src/views");
 
@@ -41,6 +42,9 @@ const KNOWN = new Set([
     "diagnostics",
     "tour",
     "tour-exit",
+    "review-save",
+    "review-list",
+    "review-load",
 ]);
 
 /** Routes that are implemented elsewhere and land later in the plan. */
@@ -53,6 +57,8 @@ const PAYLOAD_OPTIONAL = new Set([
     "annotate-clear",
     "diagnostics",
     "tour-exit",
+    "review-save",
+    "review-list",
 ]);
 
 async function dispatch(route, payload) {
@@ -88,6 +94,15 @@ async function dispatch(route, payload) {
 
         case "tour-exit":
             return tour.exit();
+
+        case "review-save":
+            return reviews.save(payload);
+
+        case "review-list":
+            return reviews.list(payload);
+
+        case "review-load":
+            return reviews.load(payload);
 
         default:
             if (PLANNED.has(route)) {
@@ -154,6 +169,7 @@ function activate(context) {
     diagnostics.activate(context);
     annotations.activate(context);
     tour.activate(context);
+    reviews.activate(context);
     views.activate(context);
 
     context.subscriptions.push(

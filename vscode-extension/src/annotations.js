@@ -240,6 +240,11 @@ async function revealEntry(entry) {
     return true;
 }
 
+/** The current set, for saving a review. */
+function getState() {
+    return { title, entries: ordered, current: cursor };
+}
+
 function clearState() {
     byFile.clear();
     ordered = [];
@@ -335,4 +340,4 @@ function activate(context) {
     );
 }
 
-module.exports = { activate, annotate, clear, applyToAllVisible };
+module.exports = { activate, annotate, clear, applyToAllVisible, getState };
