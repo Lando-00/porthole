@@ -25,6 +25,7 @@ const annotations = require("./src/annotations");
 const diagnostics = require("./src/diagnostics");
 const tour = require("./src/tour");
 const reviews = require("./src/reviews");
+const send = require("./src/send");
 const symbols = require("./src/symbols");
 const views = require("./src/views");
 
@@ -170,6 +171,7 @@ function activate(context) {
     annotations.activate(context);
     tour.activate(context);
     reviews.activate(context);
+    send.activate(context);
     views.activate(context);
 
     context.subscriptions.push(

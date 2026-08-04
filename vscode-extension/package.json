@@ -88,6 +88,11 @@
       {
         "command": "porthole.loadReview",
         "title": "porthole: Load review"
+      },
+      {
+        "command": "porthole.sendToCopilot",
+        "title": "porthole: Send selection to Copilot",
+        "icon": "$(comment-discussion)"
       }
     ],
     "viewsContainers": {
@@ -176,6 +181,11 @@
         "command": "porthole.tour.exit",
         "key": "alt+escape",
         "when": "porthole.tourActive"
+      },
+      {
+        "command": "porthole.sendToCopilot",
+        "key": "ctrl+alt+.",
+        "when": "editorTextFocus"
       }
     ],
     "menus": {
@@ -183,6 +193,13 @@
         {
           "command": "porthole.tour.goto",
           "when": "false"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "porthole.sendToCopilot",
+          "group": "porthole@1",
+          "when": "editorTextFocus"
         }
       ]
     }
