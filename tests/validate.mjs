@@ -140,6 +140,69 @@ check("the example config is accepted by the loader", () => {
     return "parses";
 });
 
+// --- protocol drift ---------------------------------------------------------
+//
+// The two halves ship separately and share nothing but the filesystem
+// contract in docs/PROTOCOL.md. These checks catch the drift that a runtime
+// test would only find once someone hit the route.
+
+/** The route names the companion's dispatcher accepts. */
+function companionRoutes() {
+    const source = readFileSync(join(ROOT, "vscode-extension/extension.js"), "utf8");
+    const match = source.match(/const KNOWN = new Set\(\[([^\]]*)\]\)/);
+    if (!match) throw new Error("could not find the KNOWN route set in extension.js");
+    return new Set([...match[1].matchAll(/"([^"]*)"/g)].map((m) => m[1]));
+}
+
+/** The route names the CLI actually calls. */
+function cliRoutes() {
+    const found = new Set();
+    for (const file of sourceFiles(join(ROOT, "extensions"))) {
+        const source = readFileSync(file, "utf8");
+        for (const m of source.matchAll(/callCompanion\(\s*"([\w-]+)"/g)) found.add(m[1]);
+    }
+    return found;
+}
+
+check("every route the CLI calls exists in the companion", () => {
+    const known = companionRoutes();
+    const called = cliRoutes();
+    const missing = [...called].filter((r) => !known.has(r));
+    if (missing.length) {
+        throw new Error(`the companion has no route for: ${missing.join(", ")}`);
+    }
+    return `${called.size} called / ${known.size} known`;
+});
+
+check("docs/PROTOCOL.md documents every companion route", () => {
+    const spec = readFileSync(join(ROOT, "docs/PROTOCOL.md"), "utf8");
+    const undocumented = [...companionRoutes()].filter(
+        (route) => route && !spec.includes(`\`${route}\``),
+    );
+    if (undocumented.length) {
+        throw new Error(`missing from the protocol spec: ${undocumented.join(", ")}`);
+    }
+    return "in sync";
+});
+
+check("both halves agree on the transport directories", () => {
+    // Divergence here is invisible at runtime: each side would happily use its
+    // own directory and simply never see the other.
+    const files = {
+        companion: "vscode-extension/src/transport.js",
+        cli: "extensions/porthole/lib/companion.mjs",
+    };
+    for (const [half, relPath] of Object.entries(files)) {
+        const source = readFileSync(join(ROOT, relPath), "utf8");
+        for (const segment of ["porthole", "req", "ack"]) {
+            if (!source.includes(`"${segment}"`)) {
+                throw new Error(`${half} (${relPath}) does not use the '${segment}' directory`);
+            }
+        }
+    }
+    return "req/ack agree";
+});
+
 // ---------------------------------------------------------------------------
 
 console.log(checks.join("\n"));
