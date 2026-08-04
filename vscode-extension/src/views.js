@@ -12,6 +12,7 @@
 const vscode = require("vscode");
 
 const { findSession, describeSession, readTodos } = require("./session");
+const tour = require("./tour");
 
 const STATUS_ORDER = ["in_progress", "pending", "blocked", "done"];
 
@@ -251,15 +252,103 @@ function basename(p) {
     return String(p).split(/[\\/]/).filter(Boolean).pop();
 }
 
+// ---------------------------------------------------------------------------
+// Tour view
+// ---------------------------------------------------------------------------
+
+/**
+ * The whole walkthrough at a glance.
+ *
+ * The CodeLens shows one step in context; this shows the shape of the entire
+ * explanation, which is what tells you how much is left and lets you jump
+ * back to a step you half-followed.
+ */
+class TourProvider {
+    constructor() {
+        this._changed = new vscode.EventEmitter();
+        this.onDidChangeTreeData = this._changed.event;
+    }
+
+    refresh() {
+        this._changed.fire();
+    }
+
+    getTreeItem(item) {
+        return item;
+    }
+
+    getChildren(item) {
+        if (item) return item.children || [];
+
+        const { title, steps, current } = tour.getState();
+        if (steps.length === 0) {
+            return [
+                new Node("No tour running", vscode.TreeItemCollapsibleState.None, {
+                    iconPath: themed("compass"),
+                    description: "ask Copilot to walk you through some code",
+                }),
+            ];
+        }
+
+        const nodes = steps.map((step) => this.stepNode(step, current, steps.length));
+        if (!title) return nodes;
+
+        return [
+            new Node(title, vscode.TreeItemCollapsibleState.Expanded, {
+                iconPath: themed("compass", "charts.blue"),
+                description: `${current + 1}/${steps.length}`,
+                children: nodes,
+            }),
+        ];
+    }
+
+    stepNode(step, current, total) {
+        const state =
+            step.index === current ? "current" : step.index < current ? "visited" : "pending";
+        const style = {
+            current: { icon: "play", color: "charts.blue" },
+            visited: { icon: "pass-filled", color: "charts.green" },
+            pending: { icon: "circle-outline", color: undefined },
+        }[state];
+
+        const node = new Node(
+            `${step.index + 1}. ${step.stepTitle}`,
+            vscode.TreeItemCollapsibleState.None,
+            {
+                iconPath: themed(style.icon, style.color),
+                description: `${basename(step.file)}:${step.startLine}`,
+                command: {
+                    command: "porthole.tour.goto",
+                    title: "Go to step",
+                    arguments: [step.index],
+                },
+                contextValue: "tourStep",
+            },
+        );
+
+        const tooltip = new vscode.MarkdownString();
+        tooltip.isTrusted = false; // model-written text
+        tooltip.appendMarkdown(`**Step ${step.index + 1}/${total}** · ${step.stepTitle}\n\n`);
+        if (step.narration) tooltip.appendMarkdown(step.narration);
+        node.tooltip = tooltip;
+
+        return node;
+    }
+}
+
 function activate(context) {
     const sessionProvider = new SessionProvider();
     const tasksProvider = new TasksProvider(context.extensionUri);
+    const tourProvider = new TourProvider();
 
     const sessionView = vscode.window.createTreeView("porthole.session", {
         treeDataProvider: sessionProvider,
     });
     const tasksView = vscode.window.createTreeView("porthole.tasks", {
         treeDataProvider: tasksProvider,
+    });
+    const tourView = vscode.window.createTreeView("porthole.tour", {
+        treeDataProvider: tourProvider,
     });
 
     const refresh = () => {
@@ -270,7 +359,11 @@ function activate(context) {
     context.subscriptions.push(
         sessionView,
         tasksView,
+        tourView,
         vscode.commands.registerCommand("porthole.refresh", refresh),
+        // The tour drives this view, not the other way round, so it refreshes
+        // from the tour's own state changes rather than on a timer.
+        tour.onDidChangeState(() => tourProvider.refresh()),
         // Cheap, event-driven freshness instead of a watcher.
         sessionView.onDidChangeVisibility((e) => e.visible && sessionProvider.refresh()),
         tasksView.onDidChangeVisibility((e) => e.visible && tasksProvider.refresh()),

@@ -23,6 +23,7 @@ const presence = require("./src/presence");
 const reveal = require("./src/reveal");
 const annotations = require("./src/annotations");
 const diagnostics = require("./src/diagnostics");
+const tour = require("./src/tour");
 const symbols = require("./src/symbols");
 const views = require("./src/views");
 
@@ -38,13 +39,21 @@ const KNOWN = new Set([
     "annotate-clear",
     "symbol",
     "diagnostics",
+    "tour",
+    "tour-exit",
 ]);
 
 /** Routes that are implemented elsewhere and land later in the plan. */
 const PLANNED = new Set();
 
 /** Routes that carry no payload, so a missing payload file is not an error. */
-const PAYLOAD_OPTIONAL = new Set(["ping", "clear", "annotate-clear", "diagnostics"]);
+const PAYLOAD_OPTIONAL = new Set([
+    "ping",
+    "clear",
+    "annotate-clear",
+    "diagnostics",
+    "tour-exit",
+]);
 
 async function dispatch(route, payload) {
     switch (route) {
@@ -73,6 +82,12 @@ async function dispatch(route, payload) {
 
         case "diagnostics":
             return diagnostics.read(payload);
+
+        case "tour":
+            return tour.start(payload);
+
+        case "tour-exit":
+            return tour.exit();
 
         default:
             if (PLANNED.has(route)) {
@@ -138,6 +153,7 @@ function activate(context) {
     // exist already.
     diagnostics.activate(context);
     annotations.activate(context);
+    tour.activate(context);
     views.activate(context);
 
     context.subscriptions.push(

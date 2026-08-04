@@ -45,19 +45,35 @@ const MAX_MESSAGE = 1000;
 /** Sort key: worst first, so truncation drops the least important entries. */
 const SEVERITY_RANK = { error: 0, warning: 1, info: 2, hint: 3 };
 
-let collection = null;
+let collections = new Map();
+
+/**
+ * Annotations and tours are separate overlays that can be on screen at the
+ * same time, so each gets its own collection. One shared collection would mean
+ * starting a tour silently emptied the annotations out of the Problems panel.
+ *
+ * Both still carry `source: "porthole"`, so the read side filters them out
+ * together.
+ */
+function collectionFor(layer) {
+    if (!collections.has(layer)) {
+        const label = layer === "annotations" ? SOURCE : `${SOURCE} ${layer}`;
+        collections.set(layer, vscode.languages.createDiagnosticCollection(label));
+    }
+    return collections.get(layer);
+}
 
 // --- write ------------------------------------------------------------------
 
 /**
- * Republishes the whole annotation set.
+ * Republishes a whole layer.
  *
  * Always a full replace rather than an incremental update: the annotation store
  * is small, and a stale entry left behind in the Problems panel is worse than
  * the cost of rebuilding it.
  */
-function publish(entries) {
-    if (!collection) return;
+function publish(layer, entries) {
+    const collection = collectionFor(layer);
     collection.clear();
 
     const byFile = new Map();
@@ -111,7 +127,8 @@ function firstLine(message) {
     return line.length > 200 ? `${line.slice(0, 197)}...` : line;
 }
 
-function clear() {
+function clear(layer) {
+    const collection = collections.get(layer);
     if (collection) collection.clear();
 }
 
@@ -240,8 +257,12 @@ function describe(d, severity) {
 // --- lifecycle --------------------------------------------------------------
 
 function activate(context) {
-    collection = vscode.languages.createDiagnosticCollection(SOURCE);
-    context.subscriptions.push(collection);
+    context.subscriptions.push({
+        dispose() {
+            for (const collection of collections.values()) collection.dispose();
+            collections = new Map();
+        },
+    });
 }
 
 module.exports = { activate, publish, clear, read, SOURCE };

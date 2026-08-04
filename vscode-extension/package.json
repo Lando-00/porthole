@@ -2,7 +2,7 @@
   "name": "porthole-companion",
   "displayName": "porthole companion",
   "description": "Lets the porthole Copilot CLI plugin reveal and highlight ranges in this window.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "Lando-00",
   "license": "MIT",
   "repository": {
@@ -60,6 +60,26 @@
         "command": "porthole.refresh",
         "title": "porthole: Refresh session and tasks",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "porthole.tour.next",
+        "title": "porthole: Next tour step"
+      },
+      {
+        "command": "porthole.tour.previous",
+        "title": "porthole: Previous tour step"
+      },
+      {
+        "command": "porthole.tour.goto",
+        "title": "porthole: Go to tour step"
+      },
+      {
+        "command": "porthole.tour.list",
+        "title": "porthole: List tour steps"
+      },
+      {
+        "command": "porthole.tour.exit",
+        "title": "porthole: Exit tour"
       }
     ],
     "viewsContainers": {
@@ -80,6 +100,10 @@
         {
           "id": "porthole.tasks",
           "name": "Tasks"
+        },
+        {
+          "id": "porthole.tour",
+          "name": "Tour"
         }
       ]
     },
@@ -93,15 +117,6 @@
         "contents": "No active Copilot CLI session was found.\n[Refresh](command:porthole.refresh)"
       }
     ],
-    "menus": {
-      "view/title": [
-        {
-          "command": "porthole.refresh",
-          "when": "view == porthole.session || view == porthole.tasks",
-          "group": "navigation"
-        }
-      ]
-    },
     "configuration": {
       "title": "porthole companion",
       "properties": {
@@ -137,6 +152,31 @@
           "description": "Open and scroll to the focused annotation when a new set arrives."
         }
       }
+    },
+    "keybindings": [
+      {
+        "command": "porthole.tour.next",
+        "key": "alt+]",
+        "when": "porthole.tourActive"
+      },
+      {
+        "command": "porthole.tour.previous",
+        "key": "alt+[",
+        "when": "porthole.tourActive"
+      },
+      {
+        "command": "porthole.tour.exit",
+        "key": "alt+escape",
+        "when": "porthole.tourActive"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "porthole.tour.goto",
+          "when": "false"
+        }
+      ]
     }
   }
 }

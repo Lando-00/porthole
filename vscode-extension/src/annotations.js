@@ -201,7 +201,7 @@ async function annotate(payload) {
 
     applyToAllVisible();
     updateStatusBar();
-    diagnostics.publish(ordered);
+    diagnostics.publish("annotations", ordered);
 
     diag(`annotate ${accepted.length} accepted, ${rejected.length} rejected`);
 
@@ -257,7 +257,7 @@ function clear() {
     }
     clearState();
     updateStatusBar();
-    diagnostics.clear();
+    diagnostics.clear("annotations");
     return { ok: true, total: 0 };
 }
 

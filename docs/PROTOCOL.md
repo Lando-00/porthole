@@ -144,6 +144,7 @@ Set by the CLI so callers can react without parsing English:
 | `symbol` | `{ file, symbol, ... }` | no | 0.2.0 |
 | `diagnostics` | see below | **yes** | 0.3.0 |
 | `tour` | see below | **yes** | 0.3.0 |
+| `tour-exit` | none | no | 0.3.0 |
 | `review-save` | `{ slug, title }` | **yes** | 0.3.0 |
 | `review-list` | `{ limit, repo }` | **yes** | 0.3.0 |
 | `review-load` | `{ file }` or `{ slug }` | **yes** | 0.3.0 |
