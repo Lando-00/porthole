@@ -7,12 +7,14 @@
 //
 // It is deliberately deterministic: no model, no interpretation.
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { config, configPath, copilotHome, loadConfig } from "./config.mjs";
 import { callCompanion, findCompanions } from "./companion.mjs";
 import { connectedIdes, resolveEditorExe, resolveEditorTarget, whichEditor } from "./editor.mjs";
+import * as endpoint from "./endpoint.mjs";
+import { findEndpoints, portholeHome } from "./endpoint.mjs";
 import { currentBranch, dirtyCount, isGitRepo, projectRoot } from "./git.mjs";
 
 const MARK = { ok: "ok  ", warn: "warn", fail: "fail", info: "    " };
@@ -54,6 +56,7 @@ export async function doctor(session, ctx) {
     editors(report);
     ides(report, cwd);
     await companion(report, cwd);
+    reverseChannel(report, session, ctx);
     sessionSection(report, session, ctx);
     gitSection(report, cwd);
     verdict(report);
@@ -227,6 +230,71 @@ async function companion(report, cwd) {
             `no answer after ${elapsed}ms (${ping.reason}): ${ping.error}`,
             "reload the VS Code window; if it persists, reinstall the companion",
         );
+    }
+}
+
+/**
+ * Is this session reachable from VS Code, and can the two halves see the same
+ * filesystem?
+ *
+ * A remote or WSL window is the failure worth naming: everything looks healthy
+ * on both sides, but the directories they each write to are different, so every
+ * message vanishes.
+ */
+function reverseChannel(report, session, ctx) {
+    report.section("reverse channel");
+
+    const me = endpoint.describe(session, ctx);
+    if (!me.endpointId) {
+        report.add("fail", "this session has no endpoint id", "reload the extension");
+        return;
+    }
+
+    report.add("ok", `addressable as ${me.endpointId}`);
+    report.detail(`session ${me.sessionId || "unknown until a command runs"}`);
+
+    const dir = join(portholeHome(), "outbox", me.endpointId);
+    if (existsSync(dir)) {
+        const waiting = safeCount(dir);
+        report.add("ok", `outbox ready${waiting ? `, ${waiting} message(s) waiting` : ""}`);
+    } else {
+        report.add(
+            "warn",
+            "outbox directory does not exist yet",
+            "reload the extension - the listener creates it at startup",
+        );
+    }
+
+    for (const c of findCompanions()) {
+        if (c.remoteName) {
+            report.add(
+                "fail",
+                `a window is running in ${c.remoteName}, which cannot see this machine's files`,
+                "run the CLI inside the same environment as VS Code",
+            );
+            continue;
+        }
+        if (c.copilotHome && c.copilotHome.toLowerCase() !== copilotHome().toLowerCase()) {
+            report.add(
+                "fail",
+                `a window is using a different Copilot home (${c.copilotHome})`,
+                "make COPILOT_HOME match in both",
+            );
+        }
+    }
+
+    const others = findEndpoints().filter((e) => e.endpointId !== me.endpointId);
+    if (others.length > 0) {
+        report.add("warn", `${others.length} other CLI session(s) are live`);
+        report.detail("VS Code will ask which one to send to");
+    }
+}
+
+function safeCount(dir) {
+    try {
+        return readdirSync(dir).filter((f) => f.endsWith(".json")).length;
+    } catch {
+        return 0;
     }
 }
 

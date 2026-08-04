@@ -7,7 +7,9 @@ Ask Copilot to show you something, and it appears in your editor — diffs,
 diagrams, files at a line, scratch notes — **in the window you already have open**.
 
 And when Copilot explains code, it can **annotate the lines it is talking about**
-while it writes, so the explanation and the code are the same conversation.
+while it writes, or **walk you through them step by step** — so the explanation
+and the code are the same conversation. Selections travel the other way too:
+send code from the editor straight into the session.
 
 ## Commands
 
@@ -25,6 +27,9 @@ same behaviour every time, no model in the loop, no tokens spent.
 | `/goto <symbolName>` | Select a function, class or constant **by name**, whole body |
 | `/annotate <file:start-end> [note]` | Leave a marked, hoverable note on those lines |
 | `/annotate-clear` | Remove every annotation |
+| `/problems` | What VS Code is reporting right now: errors, warnings, type errors |
+| `/reviews` | List saved review findings; `load <name>` to bring one back |
+| `/tour-exit` | End a running walkthrough |
 | `/porthole` | Diagnose everything: config, editors, connected windows, companion, session, git |
 
 **Agent-driven** — skills, where interpretation is the point.
@@ -36,20 +41,33 @@ same behaviour every time, no model in the loop, no tokens spent.
 | `/scratch` | Create/open a scratch note in the session folder |
 
 > `/diff` and `/review` are already built-in Copilot CLI commands, hence
-> `/vsdiff` and `/vsreview`.
+> `/vsdiff`, `/vsreview` and `/reviews`.
 
 ## Tools Copilot can call
 
-Two tools are registered with the agent, so it can drive your editor mid-answer
+Five tools are registered with the agent, so it can drive your editor mid-answer
 without you typing anything.
 
 | Tool | What it does |
 |---|---|
 | `porthole_annotate` | Marks the exact lines it is describing, with a message on hover |
 | `porthole_goto` | Opens a file, a range or a symbol, optionally annotating it |
+| `porthole_tour` | A narrated, ordered walkthrough you step through with Next/Prev |
+| `porthole_problems` | Reads your Problems panel, so it stops guessing at compile errors |
+| `porthole_review` | Saves findings and loads them back, even in a later session |
 
 Ask *"walk me through how a porthole request reaches VS Code"* and the relevant
 ranges light up in the editor as the explanation arrives.
+
+## Sending code back
+
+`Ctrl+Alt+.` in VS Code — or right-click → **porthole: Send selection to
+Copilot** — sends the selected code, its location, any errors reported on those
+lines, and an optional question straight into the running CLI session as a
+prompt.
+
+It waits for the session to confirm receipt, so it never claims to have sent
+something that did not arrive.
 
 ### Why the split
 
@@ -95,6 +113,7 @@ Optional, at `~/.copilot/porthole.json`. Copy
   "preferConnectedIde": true,  // drive the window you are already in
   "workspaceDir": null,        // where generated workspace and diff files go; null = temp
   "companionTimeoutMs": 2000,  // how long to wait for the companion to answer
+  "sendMode": "enqueue",       // selections from VS Code: enqueue | immediate
   "goto": { "symbolFallback": true }
 }
 ```
@@ -115,6 +134,11 @@ back to defaults and tells you once.
 - GitHub Copilot CLI (developed against **1.0.77**)
 - `code-insiders` or `code` on your `PATH` — Insiders is preferred by default
 - `git` on your `PATH` (optional; non-repo folders still work)
+
+> **Windows is the tested platform.** The code is written to be portable and
+> uses no shell-specific tooling, but macOS and Linux have not been verified.
+> A VS Code window running over WSL, SSH or in a container cannot see the CLI's
+> filesystem; porthole detects that and says so rather than timing out.
 - Node 22+ for the sidebar's task list (used only if the editor cannot read
   SQLite itself)
 
@@ -158,24 +182,45 @@ New builds are picked up by **new windows**; reload an existing one.
 
 ### How they talk
 
-One direction only, with a receipt:
+Both directions, each with a receipt. The full contract is in
+[`docs/PROTOCOL.md`](docs/PROTOCOL.md).
+
+**CLI → editor:**
 
 ```
 1. CLI writes    <tmp>/porthole/req/<requestId>.json
 2. CLI fires     vscode-insiders://lando-00.porthole-companion/<route>?req=<requestId>
 3. companion     reads the payload, acts
-4. companion     writes <tmp>/porthole/ack/<requestId>.json  ->  { ok, ... }
+4. companion     writes <tmp>/porthole/ack/<requestId>.json  ->  { ok, result, ... }
 5. CLI polls     for the ack, then reports what actually happened
 ```
 
+**Editor → CLI:**
+
+```
+1. companion     writes ~/.copilot/porthole/outbox/<endpointId>/<messageId>.json
+2. CLI claims    it by renaming it into inflight/  (atomic: at most once)
+3. CLI calls     session.send({ prompt, mode: "enqueue" })
+4. CLI writes    ~/.copilot/porthole/outbox-ack/<messageId>.json
+5. companion     reports delivered, or plainly says it could not confirm
+```
+
 No socket, no listening port, nothing running in the background. Step 5 is the
-point: a URI is fire-and-forget, so without an ack a missing companion looks
-exactly like a working one — spawning the launcher always "succeeds". That is
-precisely how an earlier `/cops` managed to report success while opening
+point in both: a URI is fire-and-forget, so without an ack a missing companion
+looks exactly like a working one — spawning the launcher always "succeeds". That
+is precisely how an earlier `/cops` managed to report success while opening
 nothing.
 
-Each window also writes `~/.copilot/porthole/companion-<pid>.json` while it runs,
-so the CLI can find a live companion without paying for `code --list-extensions`.
+The return path lives under `~/.copilot` rather than the temp directory
+on purpose. `/tmp` is shared between local users on Linux and macOS, and this is
+the one channel that turns a file into a prompt for an agent that can run shell
+commands.
+
+Each side publishes a presence file — `companion-<pid>.json` and
+`cli-<endpointId>.json` — so either can find the other, and prune it, without
+paying for `code --list-extensions`. Sessions are keyed by a per-process
+endpoint id rather than the session id, because a resumed session can have two
+processes sharing one id.
 
 Two details worth knowing, both found the hard way:
 

@@ -53,6 +53,27 @@ function resolveSessionId(session, ctx) {
 }
 
 /**
+ * Builds the presence record without writing it.
+ *
+ * Used by the doctor, which should report on the world rather than change it.
+ */
+export function describe(session, ctx = null) {
+    return {
+        endpointId: ENDPOINT_ID,
+        sessionId: resolveSessionId(session, ctx) || cached.sessionId,
+        sessionName: cached.sessionName,
+        pid: process.pid,
+        cwd: process.cwd(),
+        projectRoot: cached.projectRoot,
+        tmpdir: tmpdir(),
+        copilotHome: copilotHome(),
+        version,
+        startedAt: STARTED_AT,
+        updatedAt: new Date().toISOString(),
+    };
+}
+
+/**
  * Writes or refreshes the presence file.
  *
  * Called at load and again on every command, so `sessionId` fills in as soon
@@ -67,19 +88,7 @@ export function touch(session, ctx = null, extra = {}) {
         projectRoot: extra.projectRoot ?? cached.projectRoot,
     };
 
-    const record = {
-        endpointId: ENDPOINT_ID,
-        sessionId,
-        sessionName: cached.sessionName,
-        pid: process.pid,
-        cwd: cached.cwd,
-        projectRoot: cached.projectRoot,
-        tmpdir: tmpdir(),
-        copilotHome: copilotHome(),
-        version,
-        startedAt: STARTED_AT,
-        updatedAt: new Date().toISOString(),
-    };
+    const record = describe(session, ctx);
 
     try {
         mkdirSync(portholeHome(), { recursive: true, mode: 0o700 });

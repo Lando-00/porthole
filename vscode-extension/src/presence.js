@@ -38,6 +38,12 @@ function describe(vscode, version) {
         uriScheme: vscode.env.uriScheme,
         appName: vscode.env.appName,
         appHost: vscode.env.appHost,
+        // Null when the window is local. A remote window's extension host has a
+        // different filesystem, so the CLI cannot reach it - the CLI needs to be
+        // able to say that rather than time out on every request.
+        remoteName: vscode.env.remoteName || null,
+        tmpdir: os.tmpdir(),
+        copilotHome: copilotHome(),
         // Whether the editor's own runtime can read session.db, or whether the
         // sidebar has to fall back to spawning `node`. Worth knowing from the
         // outside, because it is the one capability that varies by build.

@@ -13,6 +13,9 @@
   "//companionTimeoutMs": "How long to wait for the porthole companion VS Code extension to reply before giving up.",
   "companionTimeoutMs": 2000,
 
+  "//sendMode": "How a selection sent from VS Code is delivered. 'enqueue' waits for the current turn to finish; 'immediate' steers mid-turn.",
+  "sendMode": "enqueue",
+
   "//goto": "symbolFallback scans for a definition when the editor's language server cannot resolve a name.",
   "goto": { "symbolFallback": true }
 }
