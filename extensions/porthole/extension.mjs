@@ -42,6 +42,9 @@ import {
 import { doctor, pluginVersion } from "./lib/doctor.mjs";
 import * as endpoint from "./lib/endpoint.mjs";
 import * as outbox from "./lib/outbox.mjs";
+import { problems, tools as problemTools } from "./lib/problems.mjs";
+import { exitTour, tour, tools as tourTools } from "./lib/tour.mjs";
+import { review, tools as reviewTools } from "./lib/reviews.mjs";
 import { git, projectRoot, isGitRepo } from "./lib/git.mjs";
 import { launchEditor, resolveEditorTarget } from "./lib/editor.mjs";
 
@@ -398,8 +401,42 @@ const session = await joinSession({
                 "Diagnose porthole: config, editors, connected windows, the companion extension, session and git",
             handler: withPresence((ctx) => doctor(session, ctx)),
         },
+        {
+            name: "problems",
+            description:
+                "Show the errors and warnings VS Code is currently reporting: /problems [open|workspace]",
+            handler: withPresence(async (ctx) =>
+                session.log(await problems({ scope: (ctx.args || "").trim() || "open" })),
+            ),
+        },
+        {
+            name: "tour-exit",
+            description: "End the walkthrough running in VS Code",
+            handler: withPresence(async () => session.log(await exitTour())),
+        },
+        {
+            name: "reviews",
+            description:
+                "Saved review findings: /reviews (list), /reviews load <name>. Named 'reviews' because /review is built in",
+            handler: withPresence(async (ctx) => {
+                const [action, ...rest] = (ctx.args || "").trim().split(/\s+/).filter(Boolean);
+                if (!action) return session.log(await review({ action: "list" }));
+                if (action === "load") {
+                    return session.log(await review({ action: "load", slug: rest[0] }));
+                }
+                if (action === "save") {
+                    return session.log(await review({ action: "save", title: rest.join(" ") }));
+                }
+                return session.log("porthole: usage - /reviews, /reviews load <name>, /reviews save <title>");
+            }),
+        },
     ],
-    tools: portholeTools(() => session),
+    tools: [
+        ...portholeTools(() => session),
+        ...problemTools(),
+        ...tourTools(),
+        ...reviewTools(),
+    ],
 });
 
 // ---------------------------------------------------------------------------
