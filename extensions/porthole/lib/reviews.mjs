@@ -107,7 +107,14 @@ function describeFindings(review, resolution) {
     lines.push("");
     for (const [i, f] of (review.findings || []).entries()) {
         const where = f.startLine === f.endLine ? `${f.startLine}` : `${f.startLine}-${f.endLine}`;
-        lines.push(`${i + 1}. **${f.stepTitle || f.severity}** - ${f.file}:${where}`);
+        // The status belongs on the finding, not just in the summary: "one has
+        // changed" is useless if you cannot tell which one.
+        const mark = {
+            shifted: "  _(moved since it was saved; line numbers below are the current ones)_",
+            changed: "  _(the code here has changed - this may no longer apply)_",
+            missing: "  _(this file no longer exists)_",
+        }[f.status];
+        lines.push(`${i + 1}. **${f.stepTitle || f.severity}** - ${f.file}:${where}${mark || ""}`);
         const body = f.narration || f.message;
         if (body) lines.push(`   ${String(body).split(/\r?\n/).join("\n   ")}`);
     }

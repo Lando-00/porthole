@@ -57,8 +57,9 @@ jobs:
             copilot plugin install porthole@porthole-marketplace
             ```
 
-            Then the companion VS Code extension, for annotations, range
-            selection, symbol lookup and the sidebar:
+            Then the companion VS Code extension, which the annotations,
+            walkthroughs, Problems-panel access, saved reviews, symbol lookup,
+            sidebar and "Send to Copilot" all depend on:
 
             ```shell
             code-insiders --install-extension porthole-companion-${{ env.companion }}.vsix

@@ -69,7 +69,9 @@ function hasHostSqlite() {
 
 function write(vscode, version) {
     try {
-        fs.mkdirSync(heartbeatDir(), { recursive: true });
+        // Owner-only: this directory carries session metadata and, under
+        // outbox/, the user's selected source code.
+        fs.mkdirSync(heartbeatDir(), { recursive: true, mode: 0o700 });
         fs.writeFileSync(heartbeatPath(), JSON.stringify(describe(vscode, version), null, 2), "utf8");
     } catch (err) {
         diag(`heartbeat write failed: ${err.message}`);

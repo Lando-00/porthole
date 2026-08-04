@@ -201,6 +201,18 @@
           "group": "porthole@1",
           "when": "editorTextFocus"
         }
+      ],
+      "view/title": [
+        {
+          "command": "porthole.refresh",
+          "when": "view == porthole.session || view == porthole.tasks",
+          "group": "navigation"
+        },
+        {
+          "command": "porthole.tour.exit",
+          "when": "view == porthole.tour && porthole.tourActive",
+          "group": "navigation"
+        }
       ]
     }
   }

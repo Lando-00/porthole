@@ -14,7 +14,7 @@
 // moment the extension loads rather than from the first porthole command.
 
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -118,6 +118,22 @@ export function remove() {
  * Mirrors how the CLI already prunes companion heartbeats, so a crashed
  * session cannot leave a lie behind.
  */
+/**
+ * Whether a process is still running.
+ *
+ * ESRCH means it is gone; EPERM means it exists but belongs to someone we
+ * cannot signal, which happens routinely when one side runs elevated and the
+ * other does not. Treating EPERM as dead would delete a live session's file.
+ */
+function isAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (err) {
+        return err.code === "EPERM";
+    }
+}
+
 export function findEndpoints() {
     const dir = portholeHome();
     if (!existsSync(dir)) return [];
@@ -140,18 +156,51 @@ export function findEndpoints() {
             continue;
         }
         if (!info.pid || !info.endpointId) continue;
-        if (info.pid !== process.pid) {
-            try {
-                process.kill(info.pid, 0);
-            } catch {
-                rmSync(file, { force: true }); // that session is gone
-                continue;
-            }
+        if (info.pid !== process.pid && !isAlive(info.pid)) {
+            rmSync(file, { force: true }); // that session is gone
+            // Its outbox can never be read again - the endpoint id was unique
+            // to that process - so anything left in it would keep the user's
+            // selected source code in their home directory forever.
+            discard(join(dir, "outbox", info.endpointId));
+            continue;
         }
         found.push({ ...info, file });
     }
 
+    sweepAcks();
     return found.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+}
+
+function discard(dir) {
+    try {
+        rmSync(dir, { recursive: true, force: true });
+    } catch {
+        // racing another process's prune is fine
+    }
+}
+
+/**
+ * Drops acks nobody can still be waiting for.
+ *
+ * Senders give up after seconds, so anything an hour old is litter.
+ */
+function sweepAcks() {
+    const dir = join(portholeHome(), "outbox-ack");
+    let entries = [];
+    try {
+        entries = readdirSync(dir);
+    } catch {
+        return;
+    }
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    for (const entry of entries) {
+        const file = join(dir, entry);
+        try {
+            if (statSync(file).mtimeMs < cutoff) rmSync(file, { force: true });
+        } catch {
+            // already gone
+        }
+    }
 }
 
 /**

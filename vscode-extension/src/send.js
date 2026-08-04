@@ -62,6 +62,24 @@ function safeId(value) {
  * session id when a session is resumed, and they would otherwise race for the
  * same outbox.
  */
+/**
+ * Whether a process is still running.
+ *
+ * `process.kill(pid, 0)` throws ESRCH when the process is gone, but EPERM when
+ * it exists and simply belongs to someone we cannot signal - which is the
+ * ordinary case when one side runs elevated and the other does not. Treating
+ * every throw as "dead" would delete a live session's presence file and make it
+ * permanently unreachable.
+ */
+function isAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (err) {
+        return err.code === "EPERM";
+    }
+}
+
 function findEndpoints() {
     const dir = portholeHome();
     let entries = [];
@@ -82,16 +100,52 @@ function findEndpoints() {
             continue;
         }
         if (!info.pid || !info.endpointId) continue;
-        try {
-            process.kill(info.pid, 0);
-        } catch {
+        if (!isAlive(info.pid)) {
             fs.rmSync(file, { force: true }); // the session is gone
+            // Its outbox is unreachable by any future process, because the
+            // endpoint id was unique to it. Left alone it would keep the
+            // user's selected source code in ~/.copilot forever.
+            discard(path.join(dir, "outbox", entry.replace(/^cli-|\.json$/g, "")));
             continue;
         }
         found.push(info);
     }
 
+    sweepAcks();
     return found.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+}
+
+function discard(dir) {
+    try {
+        fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+        // racing another window's prune is fine
+    }
+}
+
+/**
+ * Drops acks nobody is waiting for any more.
+ *
+ * Every sender gives up after a few seconds, so anything older than an hour is
+ * litter by definition.
+ */
+function sweepAcks() {
+    const dir = ackDir();
+    let entries = [];
+    try {
+        entries = fs.readdirSync(dir);
+    } catch {
+        return;
+    }
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    for (const entry of entries) {
+        const file = path.join(dir, entry);
+        try {
+            if (fs.statSync(file).mtimeMs < cutoff) fs.rmSync(file, { force: true });
+        } catch {
+            // already gone
+        }
+    }
 }
 
 /**

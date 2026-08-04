@@ -234,11 +234,24 @@ async function load(payload = {}) {
 
     const resolution = { resolved: 0, shifted: 0, changed: 0, missing: 0 };
     const entries = [];
+    const resolved = [];
 
     for (const finding of review.findings || []) {
         const absolute = absoluteFile(finding.file, review.repo);
         const state = resolveFinding(finding, absolute);
         resolution[state.status] += 1;
+
+        // The resolved range, not the stored one, is what callers get. The CLI
+        // cannot see the screen, so if it were handed the original line numbers
+        // it would read or edit whatever now sits there - the exact failure the
+        // anchors exist to prevent.
+        resolved.push({
+            ...finding,
+            startLine: state.startLine,
+            endLine: state.endLine,
+            status: state.status,
+        });
+
         if (state.status === "missing") continue;
 
         entries.push({
@@ -254,7 +267,7 @@ async function load(payload = {}) {
         return {
             ok: false,
             error: "none of this review's files still exist",
-            result: { review, resolution },
+            result: { review: { ...review, findings: resolved }, resolution },
         };
     }
 
@@ -265,7 +278,10 @@ async function load(payload = {}) {
     });
 
     diag(`review loaded: ${file} ${JSON.stringify(resolution)}`);
-    return { ok: true, result: { review, resolution, file } };
+    return {
+        ok: true,
+        result: { review: { ...review, findings: resolved }, resolution, file },
+    };
 }
 
 /**

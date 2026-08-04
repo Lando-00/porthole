@@ -143,7 +143,11 @@ function validate(message) {
     if (message.endpointId !== endpointId()) return "addressed to a different endpoint";
     if (!message.file) return "no file";
     if (!message.selection && !message.note) return "nothing to send";
-    if (Date.now() - Date.parse(message.sentAt || 0) > TTL_MS) return "expired";
+    // An unparseable date must not slip past the TTL: NaN > TTL_MS is false,
+    // which would make a malformed timestamp look permanently fresh.
+    const sentAt = Date.parse(message.sentAt);
+    if (!Number.isFinite(sentAt)) return "no usable sentAt";
+    if (Date.now() - sentAt > TTL_MS) return "expired";
     return null;
 }
 
@@ -192,13 +196,22 @@ async function deliver(file) {
             mode: config().sendMode === "immediate" ? "immediate" : "enqueue",
         });
         ack(messageId, "accepted");
-        await logLine(
-            `porthole: received a selection from VS Code (${message.file}) and queued it as a prompt.`,
-        );
     } catch (err) {
         ack(messageId, "rejected", err?.message || String(err));
     } finally {
         rmSync(file, { force: true });
+    }
+
+    // Deliberately outside the try above. A logging failure must not be able
+    // to reach the rejection path and ack a message that was already accepted
+    // and enqueued - the editor would report it undelivered, the user would
+    // send it again, and the agent would act on it twice.
+    try {
+        await logLine(
+            `porthole: received a selection from VS Code (${message.file}) and queued it as a prompt.`,
+        );
+    } catch {
+        // Nothing useful to do; the message itself already landed.
     }
 }
 
@@ -242,6 +255,35 @@ async function poll() {
 }
 
 /**
+ * Messages that were never claimed.
+ *
+ * Only reachable while this process lives, since the endpoint id is unique to
+ * it - so anything still here past the TTL was written as the session was
+ * shutting down. Safety rule 7: ack it and delete it, rather than leaving the
+ * user's source code sitting in their home directory indefinitely.
+ */
+function sweepUnclaimed() {
+    const dir = outboxDir();
+    let entries = [];
+    try {
+        entries = readdirSync(dir);
+    } catch {
+        return;
+    }
+    for (const entry of entries) {
+        if (!entry.endsWith(".json")) continue;
+        const file = join(dir, entry);
+        try {
+            if (Date.now() - statSync(file).mtimeMs < TTL_MS) continue;
+            ack(entry.replace(/\.json$/, ""), "expired", "it was never picked up");
+            rmSync(file, { force: true });
+        } catch {
+            // racing our own sweep is fine
+        }
+    }
+}
+
+/**
  * Messages claimed but never finished - only possible if the process died
  * mid-delivery.
  *
@@ -267,6 +309,7 @@ function sweepInflight() {
             // racing our own sweep is fine
         }
     }
+    sweepUnclaimed();
 }
 
 export function start(session, options = {}) {
@@ -276,14 +319,27 @@ export function start(session, options = {}) {
     logLine = options.log || ((text) => session.log(text, { ephemeral: true }));
 
     const dir = outboxDir();
-    if (!ownedByUs(join(portholeHome()))) {
+    if (!ownedByUs(dir)) {
         void logLine("porthole: refusing to read the outbox - it is not owned by this user.");
         return;
     }
 
     try {
         mkdirSync(dir, { recursive: true, mode: 0o700 });
-    } catch {
+        mkdirSync(inflightDir(), { recursive: true, mode: 0o700 });
+        if (!ownedByUs(inflightDir())) {
+            void logLine("porthole: refusing to use the outbox - inflight is not owned by this user.");
+            return;
+        }
+    } catch (err) {
+        // Returning quietly here would leave the session permanently
+        // unaddressable with nothing to explain why, and /porthole would blame
+        // the wrong thing.
+        void logLine(
+            `porthole: could not open the outbox, so VS Code cannot send to this session: ${
+                err?.message || err
+            }`,
+        );
         return;
     }
 

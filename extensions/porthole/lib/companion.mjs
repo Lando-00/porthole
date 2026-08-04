@@ -20,8 +20,7 @@ import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { config, copilotHome } from "./config.mjs";
-import { pathsRelated, resolveEditorExe, resolveEditorTarget, whichEditor } from "./editor.mjs";
+import { config, copilotHome } from "./config.mjs";import { pathsRelated, resolveEditorExe, resolveEditorTarget, whichEditor } from "./editor.mjs";
 
 const ROOT = join(tmpdir(), "porthole");
 const REQ_DIR = join(ROOT, "req");
@@ -86,11 +85,16 @@ export function findCompanions() {
             continue;
         }
         if (!info.pid) continue;
+        // ESRCH means the window is gone; EPERM means it exists but is not
+        // ours to signal, which happens when one side runs elevated. Deleting
+        // on EPERM would hide a perfectly healthy window.
         try {
             process.kill(info.pid, 0);
-        } catch {
-            rmSync(file, { force: true }); // the window is gone
-            continue;
+        } catch (err) {
+            if (err.code !== "EPERM") {
+                rmSync(file, { force: true }); // the window is gone
+                continue;
+            }
         }
         found.push({ ...info, file });
     }
@@ -109,6 +113,41 @@ export function findCompanion(contextPath) {
         if (match) return match;
     }
     return companions[0];
+}
+
+/**
+ * Why a window cannot be reached, or null when it can.
+ *
+ * The two halves only meet on a shared filesystem. A window running in WSL, a
+ * container or over SSH looks perfectly healthy from both sides while writing
+ * to a completely different disk, so every request would burn the full timeout
+ * and then blame the window for being busy. Saying so up front is the whole
+ * point of publishing these fields.
+ */
+function unreachable(companion) {
+    if (companion.remoteName) {
+        return (
+            `the VS Code window is running in ${companion.remoteName}, so it cannot see this ` +
+            "machine's files. Run the CLI inside the same environment."
+        );
+    }
+    if (companion.tmpdir && !samePath(companion.tmpdir, tmpdir())) {
+        return (
+            `the VS Code window uses a different temp directory (${companion.tmpdir}), so it ` +
+            "cannot see this session's requests."
+        );
+    }
+    if (companion.copilotHome && !samePath(companion.copilotHome, copilotHome())) {
+        return (
+            `the VS Code window uses a different Copilot home (${companion.copilotHome}). ` +
+            "Set COPILOT_HOME to the same value in both."
+        );
+    }
+    return null;
+}
+
+function samePath(a, b) {
+    return String(a).replace(/[\\/]+$/, "").toLowerCase() === String(b).replace(/[\\/]+$/, "").toLowerCase();
 }
 
 /**
@@ -140,6 +179,11 @@ export async function callCompanion(route, payload = null, options = {}) {
             error: "could not find the editor executable to deliver the request to",
         };
     }
+
+    // Checked before firing: an unreachable pairing would otherwise burn the
+    // whole timeout and then report the wrong cause.
+    const blocked = unreachable(companion);
+    if (blocked) return { ok: false, reason: "refused", error: blocked };
 
     ensureDirs();
     sweep();
