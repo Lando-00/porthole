@@ -16,7 +16,24 @@ to.
 underline, a gutter icon, an overview-ruler mark, and a hover carrying its
 explanation in markdown. Annotations persist until they are cleared or replaced,
 survive closing and reopening the file, and a status bar item shows the count
-and jumps between them.
+and jumps between them. They are also published to the **Problems panel**, so
+they are navigable with F8 and filterable like any other finding.
+
+**Reading the Problems panel.** The agent can ask what the language servers and
+linters are actually reporting, rather than guessing at compile errors from the
+source. Its own annotations are excluded from that answer.
+
+**Walkthrough mode.** An ordered, narrated tour of a code path, with the
+narration and controls in a CodeLens above each step, gutter markers showing
+progress, and the whole path in the sidebar. `Alt+]` / `Alt+[` to step.
+
+**Saved reviews.** Save the current findings and load them again later, even
+from a different session. Findings carry a hash of the code they describe, so a
+review that has gone stale says so instead of marking innocent lines.
+
+**Send to Copilot.** `Ctrl+Alt+.` sends the selection, its location, any
+diagnostics on those lines and an optional question back into the running CLI
+session as a prompt.
 
 **Range selection.** A real multi-line selection, not just a cursor.
 
@@ -24,7 +41,7 @@ and jumps between them.
 language server when it is warm and a definition scan when it is not.
 
 **A sidebar.** The current Copilot session, the project and branch, plan.md and
-checkpoints, and the agent's task list grouped by status with its dependencies.
+checkpoints, the agent's task list grouped by status, and the running tour.
 
 ## Install
 
@@ -151,6 +168,50 @@ Acks `{ ok, file, startLine, endLine, name, kind, source, candidates? }` where
 files ack as `{ ok: false, error: "'x' is ambiguous", candidates: [...] }` —
 jumping to an arbitrary one would be worse than saying so.
 
+### `diagnostics`
+
+```jsonc
+{ "scope": "open", "severities": ["error", "warning"], "limit": 100 }
+```
+
+`scope` is `open` (the default — visible editors), `workspace`, or `file` with a
+`file`. Acks `{ ok, result: { files, counts, annotations, truncated, scanned } }`.
+
+porthole's own annotations are excluded from `files` and reported as
+`annotations`, so the agent cannot read its own explanation back as a finding.
+Entries are sorted worst-first before `limit` is applied.
+
+`open` is the useful default: the language server has definitely looked at
+what is on screen, whereas a cold workspace may never have been indexed.
+
+### `tour`
+
+```jsonc
+{ "title": "how a request reaches the editor",
+  "steps": [ { "file": "src/tour.js", "startLine": 120, "endLine": 145,
+               "stepTitle": "the entry point", "narration": "...",
+               "severity": "info" } ] }
+```
+
+1–50 steps. `file` may be absolute or relative to a workspace folder, and must
+exist — a step that cannot be resolved is reported in
+`result.skipped`, never silently dropped. Acks `{ ok, result: { steps, skipped } }`.
+
+`tour-exit` takes no payload and ends the tour.
+
+### `review-save` / `review-list` / `review-load`
+
+`review-save` takes `{ slug, title }` and writes the current annotations or tour
+to `<sessionDir>/porthole/reviews/<slug>.json`.
+
+`review-list` takes `{ limit, repo }` and scans **every** session folder, so a
+later session can find an earlier one's reviews.
+
+`review-load` takes `{ slug }` or `{ file }` and acks
+`{ ok, result: { review, resolution } }`, where `resolution` counts findings as
+`resolved`, `shifted`, `changed` or `missing`. A `file` must resolve inside a
+session's reviews folder or it is refused.
+
 ## Commands
 
 | Command | Does |
@@ -158,9 +219,16 @@ jumping to an arbitrary one would be worse than saying so.
 | `porthole: Clear annotations` | Removes every annotation |
 | `porthole: Next annotation` / `Previous annotation` | Steps through the set |
 | `porthole: List annotations` | Quick-pick to jump to one (also the status bar click) |
+| `porthole: Next tour step` / `Previous tour step` | `Alt+]` / `Alt+[` |
+| `porthole: List tour steps` | Quick-pick over the walkthrough |
+| `porthole: Exit tour` | `Alt+Escape` |
+| `porthole: Save review` / `Load review` | Persist and restore findings |
+| `porthole: Send selection to Copilot` | `Ctrl+Alt+.`, also on the editor context menu |
 | `porthole: Clear highlight` | Removes the reveal flash |
 | `porthole: Refresh session and tasks` | Reloads the sidebar |
 | `porthole: Show reveal URI for the current selection` | Copies a reveal URI to the clipboard |
+
+The three tour keybindings only bind while a tour is running.
 
 ## Settings
 
@@ -183,6 +251,9 @@ checkpoint count. Items open what they name.
 **Tasks** — the agent's todo list grouped by status (`in progress`, `pending`,
 `blocked`, `done`), with the description as a tooltip and `depends on:` children
 for blocked work.
+
+**Tour** — the steps of the running walkthrough, current step highlighted, click
+to jump. Empty until the agent starts one.
 
 Both read the session folder, found either from a workspace folder under
 `~/.copilot/session-state` (what `/cops` produces) or from a session holding a

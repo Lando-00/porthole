@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.3.0
+
+**Diagnostics bridge, both directions.** Annotations are now published as real
+VS Code diagnostics, so they appear in the Problems panel, are navigable with
+F8, and can be filtered and sorted like any other finding — the gutter
+decorations stay alongside them. The same API answers the other way: a
+`diagnostics` route lets the agent read what the language servers and linters
+are actually reporting instead of inferring compile errors from source. Our own
+entries are filtered out of that read by `source`, and counted separately, or
+the agent would read its own explanation back as if the compiler had said it.
+Results are severity-ordered before truncation, so a repository with five
+hundred errors returns the worst hundred rather than an arbitrary hundred.
+
+**Walkthrough mode.** A `tour` route takes an ordered, narrated list of code
+locations and turns it into something you can step through: a CodeLens carrying
+the narration and Next/Prev/Exit controls directly above the code, gutter
+markers showing done / here / still to come, a status bar position, and a
+sidebar view of the whole path. `Alt+]` and `Alt+[` step, `Alt+Escape` exits;
+all three are inert unless a tour is running. Steps are resolved up front, and
+one whose file cannot be found is reported rather than dropped.
+
+**Saved reviews.** The current annotations or tour can be saved as a review and
+loaded again later — including from a *different* session, since loading scans
+every session folder. Because line numbers rot, each finding stores a hash of
+the text it was written about, and loading reports what still holds per finding:
+resolved, shifted (the code moved, and was found again nearby), changed (the
+code was rewritten, so the finding is shown but marked stale) or missing.
+
+**Send to Copilot.** `Ctrl+Alt+.`, the editor context menu, or the palette sends
+the current selection — with its location, any diagnostics on those lines and an
+optional typed question — back into the running CLI session as a prompt. It is
+written under the user-owned `~/.copilot` rather than the shared temp directory,
+and delivery is confirmed by an ack rather than assumed.
+
 ## 0.2.0
 
 **Annotations.** The agent can mark the exact lines it is explaining: a coloured
