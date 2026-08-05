@@ -21,6 +21,8 @@ same behaviour every time, no model in the loop, no tokens spent.
 | Command | What it does |
 |---|---|
 | `/cops` · `/open-session` | Open this worktree + the current session folder in one workspace |
+| `/cops dry-run` | Preview it: which editor, whether a window is reused, every path — **without opening or writing anything** |
+| `/cops no-plan` | Same, but don't auto-open the session's `plan.md` |
 | `/vsdiff` | Diffs: no args = uncommitted; or a commit, a range, `staged`, or two file paths |
 | `/goto <file:line:col>` | Jump to a position |
 | `/goto <file:start-end>` | **Select and highlight a range** (needs the companion extension) |
@@ -55,9 +57,21 @@ without you typing anything.
 | `porthole_tour` | A narrated, ordered walkthrough you step through with Next/Prev |
 | `porthole_problems` | Reads your Problems panel, so it stops guessing at compile errors |
 | `porthole_review` | Saves findings and loads them back, even in a later session |
+| `porthole_open_session` | `/cops`, on request — described so the agent only opens your editor when you ask |
 
 Ask *"walk me through how a porthole request reaches VS Code"* and the relevant
 ranges light up in the editor as the explanation arrives.
+
+### plan.md opens itself
+
+When the session folder has a `plan.md`, opening the session makes it the active
+editor — because the plan is what you were about to read anyway. `no-plan` opts
+out for a single run.
+
+The mechanism differs by path, and the difference is not cosmetic: `--add` and
+`--goto` in the same invocation silently drop the `--goto`, so when reusing a
+window the reveal is a separate step, routed through the companion so it is
+acknowledged rather than assumed.
 
 ## Sending code back
 

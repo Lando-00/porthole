@@ -30,7 +30,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { joinSession } from "@github/copilot-sdk/extension";
 
-import { config, copilotHome, reportConfigProblems } from "./lib/config.mjs";
+import { config, reportConfigProblems } from "./lib/config.mjs";
 import {
     annotate,
     clearAnnotations,
@@ -45,24 +45,13 @@ import * as outbox from "./lib/outbox.mjs";
 import { problems, tools as problemTools } from "./lib/problems.mjs";
 import { exitTour, tour, tools as tourTools } from "./lib/tour.mjs";
 import { review, tools as reviewTools } from "./lib/reviews.mjs";
+import { openSession, parseArgs, tools as openSessionTools } from "./lib/opensession.mjs";
 import { git, projectRoot, isGitRepo } from "./lib/git.mjs";
 import { launchEditor, resolveEditorTarget } from "./lib/editor.mjs";
 
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
-
-/**
- * The session folder for a given session id.
- *
- * The command handler receives the real session id, so this is exact - unlike
- * the standalone scripts, which fall back to "most recently modified".
- */
-function sessionFolderFor(sessionId) {
-    if (!sessionId) return null;
-    const dir = join(copilotHome(), "session-state", sessionId);
-    return existsSync(dir) ? dir : null;
-}
 
 /**
  * Where generated files go. Configurable, because a workspace file in the temp
@@ -79,82 +68,23 @@ function safeName(value) {
     return String(value).replace(/[^\w.-]/g, "_");
 }
 
-function shortId(value, length = 8) {
-    if (!value) return "none";
-    return String(value).slice(0, length);
-}
-
-function writeJson(path, value) {
-    writeFileSync(path, JSON.stringify(value, null, 2), { encoding: "utf8" });
-}
-
 // ---------------------------------------------------------------------------
 // /cops, /open-session
 // ---------------------------------------------------------------------------
 
 async function handleOpenSession(session, ctx) {
     await reportConfigProblems(session);
-    const cwd = process.cwd();
-    const root = projectRoot(cwd);
-    const name = basename(root);
-    const sessionFolder = sessionFolderFor(ctx.sessionId);
 
-    const target = resolveEditorTarget(root);
-    if (!target) {
+    const args = parseArgs(ctx.args);
+    if (args.unknown.length > 0) {
         await session.log(
-            "porthole: no editor found. Install VS Code and make sure 'code-insiders' or 'code' is on PATH.",
+            `porthole: unrecognised argument${args.unknown.length > 1 ? "s" : ""} ` +
+                `'${args.unknown.join("', '")}'. Use: /cops [dry-run] [no-plan]`,
         );
         return;
     }
 
-    // Reuse the window the user already has open rather than opening a second
-    // one on a generated workspace.
-    if (target.connected) {
-        if (sessionFolder) {
-            launchEditor(session, target.command, ["--reuse-window", "--add", sessionFolder]);
-            await session.log(
-                `porthole: added the session folder to the connected ${target.ideName} window.\n` +
-                    `  project: ${root}\n  session: ${sessionFolder}`,
-            );
-        } else {
-            launchEditor(session, target.command, ["--reuse-window", "--add", root]);
-            await session.log(
-                `porthole: no session folder on disk yet; added the project to the connected ${target.ideName} window.`,
-            );
-        }
-        return;
-    }
-
-    const folders = [{ path: root, name }];
-    if (sessionFolder) {
-        folders.push({ path: sessionFolder, name: `Copilot Session (${shortId(ctx.sessionId)})` });
-    }
-
-    const workspace = {
-        folders,
-        settings: {
-            // Makes diagrams written into the session folder open rendered.
-            "workbench.editorAssociations": {
-                "*.diagram.md": "vscode.markdown.preview.editor",
-            },
-        },
-    };
-
-    // Written to temp, never into the repository, so it cannot be committed by
-    // accident. The name is stable per project+session, so re-running focuses
-    // the same window instead of piling up duplicates.
-    const outDir = portholeTempDir("porthole-workspaces");
-    const wsFile = join(outDir, `${safeName(name)}-${shortId(ctx.sessionId)}.code-workspace`);
-    writeJson(wsFile, workspace);
-
-    launchEditor(session, target.command, [wsFile]);
-
-    await session.log(
-        sessionFolder
-            ? `porthole: opened '${name}' + the Copilot session folder in one workspace.\n` +
-                  `  project: ${root}\n  session: ${sessionFolder}`
-            : `porthole: opened '${name}'. No session folder found on disk yet.`,
-    );
+    await session.log(await openSession(session, ctx, args));
 }
 
 // ---------------------------------------------------------------------------
@@ -363,13 +293,13 @@ const session = await joinSession({
         {
             name: "cops",
             description:
-                "Open this worktree + the current Copilot session folder in one VS Code workspace",
+                "Open this worktree + the current Copilot session folder in one VS Code workspace. Args: dry-run, no-plan",
             handler: withPresence((ctx) => handleOpenSession(session, ctx)),
         },
         {
             name: "open-session",
             description:
-                "Open this worktree + the current Copilot session folder in one VS Code workspace",
+                "Open this worktree + the current Copilot session folder in one VS Code workspace. Args: dry-run, no-plan",
             handler: withPresence((ctx) => handleOpenSession(session, ctx)),
         },
         {
@@ -433,6 +363,7 @@ const session = await joinSession({
     ],
     tools: [
         ...portholeTools(() => session),
+        ...openSessionTools(() => session),
         ...problemTools(),
         ...tourTools(),
         ...reviewTools(),
