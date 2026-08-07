@@ -36,6 +36,8 @@ same behaviour every time, no model in the loop, no tokens spent.
 | `/reviews` | List saved review findings; `load <name>` to bring one back |
 | `/tours` | The walkthrough library; `/tours <id>` to walk one, `close`, `delete <id>` |
 | `/tour-exit` | Stop walking the active tour (it stays in the library) |
+| `/porthole help` | Every command, grouped, with examples |
+| `/porthole example` | **Have Copilot demonstrate porthole on your own code** |
 | `/porthole` | Diagnose everything: config, editors, connected windows, companion, session, git |
 
 **Agent-driven** — skills, where interpretation is the point.
@@ -154,6 +156,19 @@ code-insiders --install-extension Lando-00.porthole-companion
 or find **porthole companion** in the Extensions view.
 
 Verify everything with `/porthole` in an interactive session.
+
+## Where to start
+
+```
+/porthole example
+```
+
+Copilot picks something real in your project, builds a narrated walkthrough of
+it, and marks it up — so you learn what porthole is for by watching it happen on
+code you already know, rather than by reading about it.
+
+`/porthole help` lists everything else. And in VS Code, the companion opens a
+short getting-started walkthrough the first time it runs.
 
 > **The first time `/cops` opens a new window, VS Code may ask whether you trust
 > the workspace.** Say yes — until you do, VS Code disables every extension,

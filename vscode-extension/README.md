@@ -268,6 +268,7 @@ session's reviews folder or it is refused.
 
 | Command | Does |
 | --- | --- |
+| `porthole: Get started` | Reopens the getting-started walkthrough |
 | `porthole: Clear annotations` | Removes every annotation |
 | `porthole: Next annotation` / `Previous annotation` | Steps through the set |
 | `porthole: List annotations` | Quick-pick to jump to one (also the status bar click) |
@@ -294,6 +295,7 @@ The three tour keybindings only bind while a tour is running.
 | `porthole.highlight.flashDurationMs` | `2500` | `0` keeps the flash until cleared |
 | `porthole.annotations.gutterIcons` | `true` | Gutter icon beside each annotated range |
 | `porthole.annotations.autoRevealFocus` | `true` | Scroll to the focused annotation on arrival |
+| `porthole.gettingStarted.show` | `true` | Open the getting-started walkthrough the first time this extension runs. It is shown once either way |
 | `porthole.problems.publish` | `true` | Show annotations and tour steps in the Problems panel. Each is marked on its **first line only**; turn this off for no underline at all |
 | `porthole.diagnostics` | `false` | Log to `<tmp>/porthole-companion.log` |
 

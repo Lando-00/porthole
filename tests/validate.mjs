@@ -219,6 +219,48 @@ check("the /cops workspace file is written somewhere trustable", () => {
     return "session folder, falling back to temp";
 });
 
+check("the getting-started walkthrough is intact", () => {
+    // Every one of these fails silently. A missing media file renders an empty
+    // step, a completion event naming a context key nobody sets leaves the step
+    // ticked-off-never, and a wrong walkthrough id makes the command that opens
+    // it a no-op - all in the one feature whose entire job is a good first
+    // impression.
+    const dir = join(ROOT, "vscode-extension");
+    const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    const walkthroughs = manifest.contributes?.walkthroughs || [];
+    if (walkthroughs.length === 0) throw new Error("no walkthrough is contributed");
+
+    const walkthrough = walkthroughs[0];
+    const expectedId = `${manifest.publisher}.${manifest.name}#${walkthrough.id}`;
+    const onboarding = readFileSync(join(dir, "src/onboarding.js"), "utf8");
+    // Derived from the manifest at runtime, so this asserts it is still derived
+    // rather than pinning a literal that would then need updating twice.
+    if (!/manifest\.publisher\}\.\$\{manifest\.name\}#\$\{walkthrough\.id\}/.test(onboarding)) {
+        throw new Error(
+            `onboarding.js should build the id from the manifest (expected ${expectedId})`,
+        );
+    }
+
+    // Context keys the steps complete on must actually be set somewhere.
+    const sources = ["src/context.js", "src/tour.js"]
+        .map((f) => readFileSync(join(dir, f), "utf8"))
+        .join("\n");
+
+    for (const step of walkthrough.steps || []) {
+        if (step.media?.markdown && !existsSync(join(dir, step.media.markdown))) {
+            throw new Error(`step '${step.id}' points at a missing ${step.media.markdown}`);
+        }
+        for (const event of step.completionEvents || []) {
+            const key = /^onContext:(.+)$/.exec(event)?.[1];
+            if (!key) continue;
+            if (!sources.includes(`"${key.replace(/^porthole\./, "")}"`) && !sources.includes(key)) {
+                throw new Error(`step '${step.id}' completes on '${key}', which nothing sets`);
+            }
+        }
+    }
+    return `${walkthrough.steps.length} steps, media and context keys present`;
+});
+
 check("the publisher matches the hardcoded URI authority", () => {
     // The CLI fires vscode://<publisher>.<name>/<route>, lower-cased, and that
     // authority is a constant in companion.mjs. Publishing under a different

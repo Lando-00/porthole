@@ -2,7 +2,7 @@
   "name": "porthole-companion",
   "displayName": "porthole companion",
   "description": "The editor half of porthole: lets Copilot CLI reveal ranges, annotate code, run narrated walkthroughs, read your Problems panel, and take a selection back into the session.",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "publisher": "Lando-00",
   "license": "MIT",
   "icon": "icon.png",
@@ -98,6 +98,11 @@
         "title": "porthole: Exit tour"
       },
       {
+        "command": "porthole.gettingStarted",
+        "title": "porthole: Get started",
+        "icon": "$(book)"
+      },
+      {
         "command": "porthole.tour.switch",
         "title": "porthole: Switch tour",
         "icon": "$(list-unordered)"
@@ -175,6 +180,59 @@
         "contents": "No active Copilot CLI session was found.\n[Refresh](command:porthole.refresh)"
       }
     ],
+    "walkthroughs": [
+      {
+        "id": "porthole.gettingStarted",
+        "title": "Get started with porthole",
+        "description": "Let Copilot CLI annotate and walk you through code in this window.",
+        "steps": [
+          {
+            "id": "install-cli",
+            "title": "Install the Copilot CLI plugin",
+            "description": "porthole is two halves. This extension is the editor half; it needs the CLI plugin to talk to.\n```shell\ncopilot plugin marketplace add Lando-00/porthole\ncopilot plugin install porthole@porthole-marketplace\n```\nThis step ticks off when a session connects.",
+            "media": {
+              "markdown": "media/walkthrough/install.md"
+            },
+            "completionEvents": [
+              "onContext:porthole.cliConnected"
+            ]
+          },
+          {
+            "id": "cops",
+            "title": "Open your session with /cops",
+            "description": "Run ``/cops`` in Copilot CLI to open your project and the session folder together, and bring the porthole sidebar to life.\n[Show the porthole sidebar](command:workbench.view.extension.porthole)",
+            "media": {
+              "markdown": "media/walkthrough/cops.md"
+            },
+            "completionEvents": [
+              "onContext:porthole.sessionFound"
+            ]
+          },
+          {
+            "id": "tour",
+            "title": "Ask for a walkthrough",
+            "description": "Ask your session something like *\"walk me through how this project handles errors\"*, and the explanation appears above the code, a step at a time.\n\nThis step ticks off when a tour is running.",
+            "media": {
+              "markdown": "media/walkthrough/tour.md"
+            },
+            "completionEvents": [
+              "onContext:porthole.tourLibrary"
+            ]
+          },
+          {
+            "id": "example",
+            "title": "Or have it show you",
+            "description": "Run ``/porthole example`` and the agent demonstrates porthole on your own code, explaining as it goes.\n\n``/porthole help`` lists everything else.",
+            "media": {
+              "markdown": "media/walkthrough/example.md"
+            },
+            "completionEvents": [
+              "onContext:porthole.tourActive"
+            ]
+          }
+        ]
+      }
+    ],
     "configuration": {
       "title": "porthole companion",
       "properties": {
@@ -198,6 +256,11 @@
           "type": "boolean",
           "default": false,
           "description": "Write a diagnostics log to the temp folder (porthole-companion.log). Only needed when a porthole command appears to do nothing."
+        },
+        "porthole.gettingStarted.show": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open the getting-started walkthrough the first time this extension runs. It is shown once either way; turn this off to skip it entirely."
         },
         "porthole.problems.publish": {
           "type": "boolean",

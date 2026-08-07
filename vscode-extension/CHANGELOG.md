@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0
+
+**A getting-started walkthrough.** Installing this extension used to do nothing
+visible: it waits for a Copilot CLI session that may not exist yet, and if you
+did not already know what `/cops` was, nothing told you. VS Code's own Getting
+Started page now opens once, the first time it runs, with four steps — install
+the CLI half, run `/cops`, ask for a walkthrough, and have it demonstrate itself
+on your own code.
+
+Each step ticks off from a **context key**, not from you having clicked a link:
+`porthole.cliConnected` when a session actually reaches this window,
+`porthole.sessionFound` once `/cops` has run, `porthole.tourLibrary` when a tour
+really exists. VS Code's `onCommand` completion is documented as unreliable —
+steps have been known to complete merely by being looked at — and a checklist
+that lies to a new user is worse than no checklist.
+
+Shown **once, ever**, recorded in `globalState` before opening rather than
+after, so a failure is a walkthrough nobody saw rather than one that reappears
+on every window forever. `porthole.gettingStarted.show` turns it off entirely,
+and **porthole: Get started** reopens it deliberately.
+
 ## 0.4.1
 
 **Stopped underlining code it was only explaining.** Every annotation and tour

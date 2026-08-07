@@ -26,6 +26,8 @@ const diagnostics = require("./src/diagnostics");
 const tour = require("./src/tour");
 const tourstore = require("./src/tourstore");
 const reviews = require("./src/reviews");
+const context_ = require("./src/context");
+const onboarding = require("./src/onboarding");
 const send = require("./src/send");
 const symbols = require("./src/symbols");
 const views = require("./src/views");
@@ -188,6 +190,8 @@ function activate(context) {
     reviews.activate(context);
     send.activate(context);
     views.activate(context);
+    context_.activate(context);
+    onboarding.activate(context);
 
     // Wired here rather than inside diagnostics.js, which must not depend on
     // the two modules that feed it.
