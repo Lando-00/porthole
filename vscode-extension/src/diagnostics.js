@@ -23,6 +23,18 @@ const { diag } = require("./log");
 /** Stamped on everything we publish, and filtered out on the way back in. */
 const SOURCE = "porthole";
 
+/**
+ * Whether to put our own entries in the Problems panel at all.
+ *
+ * Separate from the `porthole.diagnostics` *log* setting, which is unrelated
+ * and unfortunately named. Turning this off keeps every decoration, gutter icon
+ * and CodeLens - it only stops the Problems rows and the underline that comes
+ * with them, for anyone who would rather read their code unmarked.
+ */
+function publishingEnabled() {
+    return vscode.workspace.getConfiguration("porthole").get("problems.publish", true);
+}
+
 const TO_VSCODE = {
     error: vscode.DiagnosticSeverity.Error,
     warn: vscode.DiagnosticSeverity.Warning,
@@ -81,6 +93,8 @@ function publish(layer, entries, label) {
     const collection = collectionFor(layer, label);
     collection.clear();
 
+    if (!publishingEnabled()) return;
+
     const byFile = new Map();
     for (const entry of entries) {
         if (!entry || !entry.file) continue;
@@ -97,18 +111,27 @@ function publish(layer, entries, label) {
     }
 }
 
+/**
+ * Turns an entry into a Problems-panel row.
+ *
+ * **Deliberately marks only the first line**, however many lines the entry
+ * covers. VS Code draws a diagnostic as a squiggly underline, and a squiggle
+ * means "something is wrong here" in every editor anyone has used. Drawing one
+ * under twenty lines of code the agent is merely *explaining* makes the code
+ * harder to read, which is the exact opposite of what a walkthrough is for.
+ *
+ * The full range is already shown - by the decoration, in the gutter, and by
+ * the CodeLens. What the diagnostic adds is a row in the Problems panel and a
+ * place to jump to, and a single line serves both.
+ */
 function toDiagnostic(entry) {
     // Diagnostics do not need an open document, so the range is built straight
     // from the stored line numbers rather than clamped against one. Annotations
     // are 1-based; the API is 0-based.
     const startLine = Math.max(0, (entry.startLine || 1) - 1);
-    const endLine = Math.max(startLine, (entry.endLine || entry.startLine || 1) - 1);
     const startCol = Math.max(0, (entry.startCol || 1) - 1);
-    const endCol = entry.endCol === null || entry.endCol === undefined
-        ? Number.MAX_SAFE_INTEGER
-        : Math.max(0, entry.endCol - 1);
 
-    const range = new vscode.Range(startLine, startCol, endLine, endCol);
+    const range = new vscode.Range(startLine, startCol, startLine, Number.MAX_SAFE_INTEGER);
     const message = firstLine(entry.message) || entry.stepTitle || "porthole annotation";
 
     const diagnostic = new vscode.Diagnostic(
@@ -281,13 +304,36 @@ function describe(d, severity) {
 
 // --- lifecycle --------------------------------------------------------------
 
-function activate(context) {
-    context.subscriptions.push({
-        dispose() {
-            for (const collection of collections.values()) collection.dispose();
-            collections = new Map();
-        },
-    });
+/** Set by extension.js, so toggling the setting can re-render without a reload. */
+let republish = null;
+
+function onRepublish(fn) {
+    republish = fn;
 }
 
-module.exports = { activate, publish, clear, dispose, layers, read, SOURCE };
+function activate(context) {
+    context.subscriptions.push(
+        // Applied immediately rather than on reload. A visual setting you have
+        // to restart to see is a visual setting nobody trusts they changed.
+        vscode.workspace.onDidChangeConfiguration((e) => {
+            if (e.affectsConfiguration("porthole.problems.publish") && republish) republish();
+        }),
+        {
+            dispose() {
+                for (const collection of collections.values()) collection.dispose();
+                collections = new Map();
+            },
+        },
+    );
+}
+
+module.exports = {
+    activate,
+    publish,
+    clear,
+    dispose,
+    layers,
+    read,
+    onRepublish,
+    SOURCE,
+};

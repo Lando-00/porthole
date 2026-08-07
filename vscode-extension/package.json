@@ -199,6 +199,11 @@
           "default": false,
           "description": "Write a diagnostics log to the temp folder (porthole-companion.log). Only needed when a porthole command appears to do nothing."
         },
+        "porthole.problems.publish": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show porthole annotations and tour steps in the Problems panel. Each one is marked on its first line only. Turn this off to read your code without any underline; the gutter icons, highlights and CodeLenses stay either way."
+        },
         "porthole.annotations.gutterIcons": {
           "type": "boolean",
           "default": true,

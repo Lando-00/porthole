@@ -189,6 +189,13 @@ function activate(context) {
     send.activate(context);
     views.activate(context);
 
+    // Wired here rather than inside diagnostics.js, which must not depend on
+    // the two modules that feed it.
+    diagnostics.onRepublish(() => {
+        annotations.republish();
+        tour.republishAll();
+    });
+
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
             if (e.affectsConfiguration("porthole.diagnostics")) log.refreshFromSettings(vscode);

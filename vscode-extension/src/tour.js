@@ -335,6 +335,11 @@ function publishTour(tourId) {
     );
 }
 
+/** Re-publishes every loaded tour, e.g. when a display setting changes. */
+function republishAll() {
+    for (const tourId of tours.keys()) publishTour(tourId);
+}
+
 function layerFor(tourId) {
     return `tour:${tourId}`;
 }
@@ -818,6 +823,7 @@ module.exports = {
     getTour,
     has,
     setPersistHandler,
+    republishAll,
     // the active tour
     exit,
     goto,

@@ -340,4 +340,9 @@ function activate(context) {
     );
 }
 
-module.exports = { activate, annotate, clear, applyToAllVisible, getState };
+/** Re-publishes the current set, e.g. when a display setting changes. */
+function republish() {
+    diagnostics.publish("annotations", ordered);
+}
+
+module.exports = { activate, annotate, clear, applyToAllVisible, getState, republish };
