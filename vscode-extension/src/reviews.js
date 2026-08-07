@@ -26,6 +26,7 @@ const anchors = require("./anchors");
 const annotations = require("./annotations");
 const tour = require("./tour");
 const { findSession, sessionRoot } = require("./session");
+const { projectFolder, gitHead, isInside, storedPath, absoluteFile, normaliseSlug } = require("./repo");
 
 const SCHEMA = 1;
 const SLUG_PATTERN = /^[\w-]{1,64}$/;
@@ -115,7 +116,7 @@ function defaultTitle() {
 
 function toFinding(f, repo) {
     const out = {
-        file: repo && isInside(repo, f.file) ? path.relative(repo, f.file) : f.file,
+        file: storedPath(f.file, repo),
         startLine: f.startLine,
         endLine: f.endLine,
         severity: f.severity || "info",
@@ -292,59 +293,6 @@ function resolveReviewPath(file) {
     if (parts[1] !== "porthole" || parts[2] !== "reviews") return null;
     if (!parts[3].endsWith(".json")) return null;
     return resolved;
-}
-
-function isInside(parent, child) {
-    const rel = path.relative(parent, child);
-    return Boolean(rel) && !rel.startsWith("..") && !path.isAbsolute(rel);
-}
-
-function absoluteFile(file, repo) {
-    if (path.isAbsolute(file)) return file;
-    if (repo) return path.join(repo, file);
-    const folder = (vscode.workspace.workspaceFolders || [])[0];
-    return folder ? path.join(folder.uri.fsPath, file) : file;
-}
-
-// --- context ----------------------------------------------------------------
-
-function projectFolder() {
-    const root = sessionRoot().toLowerCase();
-    const folder = (vscode.workspace.workspaceFolders || [])
-        .map((f) => f.uri.fsPath)
-        .find((p) => !p.toLowerCase().startsWith(root));
-    return folder || null;
-}
-
-/** Reads .git directly, which is cheaper and more predictable than shelling out. */
-function gitHead(dir) {
-    try {
-        const head = fs.readFileSync(path.join(dir, ".git", "HEAD"), "utf8").trim();
-        const ref = /^ref:\s*(.+)$/.exec(head);
-        if (!ref) return { branch: null, commit: head.slice(0, 7) };
-        const branch = ref[1].replace(/^refs\/heads\//, "");
-        let commit = null;
-        try {
-            commit = fs
-                .readFileSync(path.join(dir, ".git", ref[1]), "utf8")
-                .trim()
-                .slice(0, 7);
-        } catch {
-            commit = null;
-        }
-        return { branch, commit };
-    } catch {
-        return { branch: null, commit: null };
-    }
-}
-
-function normaliseSlug(value) {
-    return String(value)
-        .trim()
-        .toLowerCase()
-        .replace(/[^\w-]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 64);
 }
 
 // --- commands ---------------------------------------------------------------

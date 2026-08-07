@@ -25,6 +25,7 @@ This document is the contract. Both halves implement against it, and
 | `~/.copilot/porthole/companion-<pid>.json` | companion | CLI | "A window is alive" |
 | `~/.copilot/porthole/cli-<endpointId>.json` | CLI | companion | "A session is alive" |
 | `<sessionDir>/porthole/reviews/<slug>.json` | companion | companion, CLI | Saved findings |
+| `<sessionDir>/porthole/tours/<tourId>.json` | companion | companion, CLI | Saved walkthroughs |
 
 `<tmp>` is `os.tmpdir()`. `~/.copilot` is `$COPILOT_HOME` when set and it
 exists, otherwise `~/.copilot`. `<sessionDir>` is
@@ -144,7 +145,10 @@ Set by the CLI so callers can react without parsing English:
 | `symbol` | `{ file, symbol, ... }` | no | 0.2.0 |
 | `diagnostics` | see below | **yes** | 0.3.0 |
 | `tour` | see below | **yes** | 0.3.0 |
-| `tour-exit` | none | no | 0.3.0 |
+| `tour-exit` | `{ tourId }`, or none for the active tour | no | 0.3.0 |
+| `tour-list` | `{ includeSteps, repo, limit }` | **yes** | 0.4.0 |
+| `tour-activate` | `{ tourId, step }` | **yes** | 0.4.0 |
+| `tour-delete` | `{ tourId }` | **yes** | 0.4.0 |
 | `review-save` | `{ slug, title }` | **yes** | 0.3.0 |
 | `review-list` | `{ limit, repo }` | **yes** | 0.3.0 |
 | `review-load` | `{ file }` or `{ slug }` | **yes** | 0.3.0 |
@@ -207,7 +211,10 @@ drops the least important entries rather than an arbitrary tail.
 ```jsonc
 // payload
 {
+  "tourId": "auth-path",     // optional; derived from the title when omitted
   "title": "how a request reaches the editor",
+  "replace": true,           // false refuses an id that is already loaded
+  "activate": true,          // begin walking it immediately, default true
   "steps": [                 // 1-50 steps; beyond that the result is refused
     {
       "file": "src/companion.mjs",   // absolute, or relative to a workspace folder
@@ -218,15 +225,60 @@ drops the least important entries rather than an arbitrary tail.
       "severity": "info"             // styling only
     }
   ],
-  "start": true              // begin at step 1 immediately, default true
+  "start": true              // pre-0.4.0 name for `activate`, still honoured
 }
 
 // result
-{ "steps": 5, "skipped": [ { "index": 3, "reason": "file not found" } ] }
+{
+  "tourId": "auth-path",
+  "replaced": false,
+  "steps": 5,
+  "active": true,
+  "library": 3,
+  "skipped": [ { "index": 3, "reason": "file not found" } ]
+}
 ```
 
 A step whose file cannot be resolved is **skipped and reported**, not silently
 dropped — the same class of bug as the fire-and-forget URI.
+
+Up to **30 tours** may be loaded at once. Beyond that the call is refused
+rather than evicting something the user may be part-way through.
+
+#### `tour-list` / `tour-activate` / `tour-delete`  *(new in 0.4.0)*
+
+```jsonc
+// tour-list result — loaded tours and saved ones, merged; loaded wins
+{
+  "activeTourId": "auth-path",
+  "loaded": 2,
+  "tours": [
+    {
+      "tourId": "auth-path", "title": "...", "steps": 5, "current": 2,
+      "loaded": true, "active": true,
+      "repo": "...", "branch": "main",
+      "createdAt": "...", "updatedAt": "...",
+      "staleness": { "resolved": 4, "shifted": 1, "changed": 0, "missing": 0 }
+    }
+  ]
+}
+
+// tour-activate payload / result — loads from disk first if not in memory
+{ "tourId": "auth-path", "step": 0 }
+{ "tourId": "auth-path", "title": "...", "steps": 5, "current": 0,
+  "staleness": { "resolved": 4, "shifted": 1, "changed": 0, "missing": 0 } }
+
+// tour-delete result — unloads it and removes every copy on disk
+{ "tourId": "auth-path", "unloaded": true, "deleted": [ "C:\\...\\auth-path.json" ] }
+```
+
+`staleness` is only present for a tour that was read from disk — a tour built
+in this window is by definition current. It is the field that lets a caller
+say "that walkthrough is three commits out of date" instead of pointing
+someone at code that has moved on.
+
+**Closing is not deleting.** `tour-exit` stops walking a tour but leaves it in
+the library, in the Problems panel and on disk. Only `tour-delete` removes it.
 
 #### `review-save` / `review-list` / `review-load`
 
@@ -531,7 +583,85 @@ tooling. This keeps porthole uncoupled from a schema it does not own.
 
 ---
 
-## 5. Housekeeping
+## 5. Tours  *(new in 0.7.0 / companion 0.4.0)*
+
+A tour is a named, ordered, narrated path through code. **Many can be loaded at
+once; exactly one is active.** You can only follow one path with your eyes at a
+time, and one gutter cannot legibly carry three different "step 1" markers — so
+the active tour owns the gutter, the CodeLenses and the status bar, while every
+loaded tour appears in the Problems panel. The panel is the map of a change;
+the active tour is where you are standing in it.
+
+### Storage
+
+```
+<sessionDir>/porthole/tours/<tourId>.json
+```
+
+`tourId` matches `^[\w-]{1,64}$` and is derived from the title when the caller
+does not supply one, with a numeric suffix on collision. It is the registry
+key, the filename, and the diagnostic layer name (`tour:<tourId>`) — one
+identifier, so those three can never disagree.
+
+```jsonc
+{
+  "schema": 1,
+  "tourId": "auth-path",
+  "title": "how a request is authenticated",
+  "createdAt": "...", "updatedAt": "...",
+  "sessionId": "<sessionId>",
+  "endpointId": "<endpointId>",   // who created it; not an access control
+  "repo": "C:\\Dev\\active\\porthole",
+  "branch": "main", "commit": "c2c0f47",
+  "current": 2,                    // resumes where the walk left off
+  "steps": [
+    { "file": "src/auth.js",       // relative to `repo` when inside it
+      "startLine": 40, "endLine": 58,
+      "stepTitle": "the token check", "narration": "...", "severity": "info",
+      "anchor": { "sha256": "...", "firstLine": "...", "lastLine": "..." } }
+  ]
+}
+```
+
+### Saving is automatic
+
+Tours are written on creation and on every cursor move, **debounced by 750 ms**
+and flushed on deactivation. A save step the model has to remember is a step
+the model will sometimes not take, and losing a walkthrough someone is part-way
+through is the failure this feature exists to prevent.
+
+Writes are `tmp` + `rename`, so a reader never sees a half-written tour.
+
+### Staleness
+
+Every step carries an anchor, and loading resolves it with the same four states
+as a review — `resolved`, `shifted`, `changed`, `missing` (§4). The **resolved**
+range is what the caller gets, never the stored one.
+
+`tour-list` reports the tally per tour, so an agent can tell that a walkthrough
+predates the current code instead of confidently pointing at whatever now sits
+at line 40. A `changed` step is also downgraded to `severity: warn` and has a
+note appended to its narration, because that is where it will actually be read.
+
+### Restoring
+
+On activation the companion loads **this session's** saved tours, and activates
+none of them. Reopening a window should show you what you had, not decide what
+you are looking at. Tours from other sessions are found by `tour-list` and
+loaded on demand by `tour-activate` — that is what makes "pick up yesterday's
+review of that pull request" work.
+
+### Ownership
+
+`endpointId` records which session created a tour. It is **provenance, not
+permission**: any session may activate or delete any tour, deliberately, so a
+later session can tidy up after a pull request is merged. Two sessions sharing
+one window now merge into one library instead of silently overwriting each
+other, which is what the pre-0.4.0 singleton did.
+
+---
+
+## 6. Housekeeping
 
 | Directory | Retention |
 |---|---|
@@ -541,6 +671,7 @@ tooling. This keeps porthole uncoupled from a schema it does not own.
 | `outbox-ack/` | Swept after 1 hour |
 | `~/.copilot/porthole/*.json` | Deleted on clean shutdown; pruned on dead pid |
 | reviews | Kept indefinitely — user data |
+| tours | Kept indefinitely — user data; removed only by `tour-delete` |
 
 Sweeps race between windows and sessions by design; every removal tolerates
 `ENOENT`.
@@ -550,7 +681,7 @@ Sweeps race between windows and sessions by design; every removal tolerates
 > poll — a message lost with nobody to ack it. Companions never sweep an outbox
 > they do not own; they only sweep `outbox-ack` entries for messages they sent.
 
-## 6. Compatibility
+## 7. Compatibility
 
 The two halves version independently and users will run mismatched pairs.
 

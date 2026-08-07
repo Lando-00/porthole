@@ -4,16 +4,23 @@
 // path, in this order, and here is why each step matters" - which is what an
 // explanation actually is.
 //
+// A *library* of tours, because a change worth explaining rarely has one
+// thread. A pull request has the auth path, the error handling and the
+// migration, and cramming those into one 50-step walk is not an explanation,
+// it is a list. So many tours can be loaded at once and each appears in the
+// Problems panel, but exactly one is active - you can only follow one path
+// with your eyes at a time, and the gutter would be nonsense otherwise.
+//
 // Four surfaces, because a walkthrough has to be discoverable without reading
 // the docs:
 //
 //   CodeLens   inline above the step, with the narration and Next/Prev/Exit
 //   gutter     a marker per step showing done / here / still to come
 //   status bar "Step 3/9", click to advance
-//   sidebar    the whole path at a glance, click any step to jump
+//   sidebar    the whole library, and the active tour's path, at a glance
 //
 // The state lives here and the surfaces read from it, so they can never
-// disagree about which step is current.
+// disagree about which tour is active or which step is current.
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -23,14 +30,25 @@ const vscode = require("vscode");
 const { diag } = require("./log");
 const { clampRange } = require("./reveal");
 const diagnostics = require("./diagnostics");
+const { projectFolder, gitHead, normaliseSlug } = require("./repo");
 
 const MAX_STEPS = 50;
 const MAX_NARRATION = 2000;
 const LENS_TITLE_MAX = 90;
 
-let steps = [];
-let current = -1;
-let title = null;
+/**
+ * How many tours may be loaded at once.
+ *
+ * Each one costs a diagnostic collection and a row in the sidebar. Well past
+ * anything a real review needs, but not unbounded.
+ */
+const MAX_TOURS = 30;
+
+/** tourId -> tour. Insertion-ordered, which is what the sidebar shows. */
+const tours = new Map();
+
+/** The one being walked, or null. */
+let activeTourId = null;
 
 let statusBar = null;
 let decorations = null;
@@ -39,18 +57,53 @@ let extensionUri = null;
 const lensChanged = new vscode.EventEmitter();
 const stateChanged = new vscode.EventEmitter();
 
-/** Fires when the step list or the cursor moves, for the tree view. */
+/** Fires when the library, the active tour or the cursor changes. */
 const onDidChangeState = stateChanged.event;
+
+/** Set by tourstore once it is wired up, to avoid a require cycle. */
+let onPersist = null;
+
+function setPersistHandler(fn) {
+    onPersist = fn;
+}
 
 // --- state ------------------------------------------------------------------
 
-function isActive() {
-    return steps.length > 0;
+function active() {
+    return activeTourId ? tours.get(activeTourId) || null : null;
 }
 
-function getState() {
-    return { title, steps, current };
+function isActive() {
+    const tour = active();
+    return Boolean(tour && tour.steps.length > 0);
 }
+
+/**
+ * The active tour, in the shape every surface already expects.
+ *
+ * Deliberately unchanged by the move to a library: views.js, reviews.js and the
+ * status bar all read this, and widening it would have turned a contained
+ * change into a rewrite. `getLibrary()` is the new door.
+ */
+function getState() {
+    const tour = active();
+    if (!tour) return { title: null, steps: [], current: -1 };
+    return { title: tour.title, steps: tour.steps, current: tour.current, tourId: tour.tourId };
+}
+
+/** Everything loaded, newest last, plus which one is being walked. */
+function getLibrary() {
+    return { tours: [...tours.values()], activeTourId };
+}
+
+function getTour(tourId) {
+    return tours.get(tourId) || null;
+}
+
+function has(tourId) {
+    return tours.has(tourId);
+}
+
 
 /**
  * Announces a state change once, to every surface.
@@ -59,12 +112,14 @@ function getState() {
  * document changes as well would re-render the lenses on every keystroke, which
  * reads as flicker.
  */
-function changed() {
+function changed({ persist } = {}) {
     lensChanged.fire();
     stateChanged.fire(getState());
     updateStatusBar();
     applyToAllVisible();
     void vscode.commands.executeCommand("setContext", "porthole.tourActive", isActive());
+    void vscode.commands.executeCommand("setContext", "porthole.tourLibrary", tours.size > 0);
+    if (persist && onPersist) onPersist(persist);
 }
 
 function normalise(raw, index) {
@@ -78,6 +133,12 @@ function normalise(raw, index) {
         stepTitle: text(raw.stepTitle, 200) || `Step ${index + 1}`,
         narration: text(raw.narration, MAX_NARRATION),
         severity: ["info", "warn", "error", "note"].includes(raw.severity) ? raw.severity : "info",
+        // Only set on a step that came off disk. Carried through so a restored
+        // tour can still say which of its steps have drifted - dropping it here
+        // was how a tour loaded from three commits ago looked perfectly current.
+        ...(["resolved", "shifted", "changed", "missing"].includes(raw.status)
+            ? { status: raw.status }
+            : {}),
     };
 }
 
@@ -121,12 +182,56 @@ function exists(file) {
 
 // --- the route --------------------------------------------------------------
 
-/** Starts a tour. Replaces any tour already running. */
-async function start(payload = {}) {
+/**
+ * Turns a title into a filename-safe id, without colliding with a tour that is
+ * already loaded.
+ *
+ * A caller that supplies its own `tourId` is taken at its word - repeating an
+ * id is how you deliberately replace a tour.
+ */
+function slugFor(payload) {
+    if (payload.tourId) {
+        const explicit = normaliseSlug(payload.tourId);
+        return explicit || "tour";
+    }
+    const base = normaliseSlug(payload.title || "") || "tour";
+    if (!tours.has(base)) return base;
+
+    for (let n = 2; n < 1000; n += 1) {
+        const candidate = `${base}-${n}`.slice(0, 64);
+        if (!tours.has(candidate)) return candidate;
+    }
+    return `${base}-${Date.now()}`.slice(0, 64);
+}
+
+/**
+ * Adds a tour to the library, or replaces one with the same id.
+ *
+ * Replacing is explicit: without `replace`, an existing id is refused rather
+ * than silently overwritten, because losing an explanation you had already
+ * walked is worse than being told to pick another name.
+ */
+async function upsert(payload = {}) {
     const incoming = Array.isArray(payload.steps) ? payload.steps : [];
     if (incoming.length === 0) return { ok: false, error: "a tour needs at least one step" };
     if (incoming.length > MAX_STEPS) {
         return { ok: false, error: `a tour is limited to ${MAX_STEPS} steps` };
+    }
+
+    const tourId = slugFor(payload);
+    const existing = tours.get(tourId);
+    if (existing && payload.replace === false) {
+        return {
+            ok: false,
+            error: `a tour called '${tourId}' is already loaded; pass replace to overwrite it, or use a different tourId`,
+        };
+    }
+
+    if (!existing && tours.size >= MAX_TOURS) {
+        return {
+            ok: false,
+            error: `${MAX_TOURS} tours are already loaded; close or delete one first`,
+        };
     }
 
     const accepted = [];
@@ -151,44 +256,197 @@ async function start(payload = {}) {
         return { ok: false, error: "no step could be resolved", result: { steps: 0, skipped } };
     }
 
-    steps = accepted;
-    title = text(payload.title, 200) || null;
-    current = -1;
+    const repo = projectFolder();
+    const head = repo ? gitHead(repo) : { branch: null, commit: null };
+    const now = new Date().toISOString();
 
-    diagnostics.publish(
-        "tour",
-        steps.map((s) => ({ ...s, message: s.stepTitle })),
+    tours.set(tourId, {
+        tourId,
+        title: text(payload.title, 200) || existing?.title || tourId,
+        steps: accepted,
+        current: -1,
+        endpointId: payload.endpointId || existing?.endpointId || null,
+        repo,
+        branch: head.branch,
+        commit: head.commit,
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+    });
+
+    publishTour(tourId);
+
+    const activate = payload.activate !== false && payload.start !== false;
+    if (activate) {
+        activeTourId = tourId;
+        await goto(0);
+    } else {
+        changed({ persist: tourId });
+    }
+
+    diag(
+        `tour ${existing ? "replaced" : "added"}: ${tourId} (${accepted.length} steps, ` +
+            `${skipped.length} skipped, library ${tours.size})`,
     );
 
-    if (payload.start !== false) await goto(0);
-    else changed();
+    return {
+        ok: true,
+        result: {
+            tourId,
+            replaced: Boolean(existing),
+            steps: accepted.length,
+            skipped,
+            active: activeTourId === tourId,
+            library: tours.size,
+        },
+    };
+}
 
-    diag(`tour started: ${accepted.length} steps, ${skipped.length} skipped`);
-    return { ok: true, result: { steps: accepted.length, skipped } };
+/** Kept for the pre-library route name. */
+const start = upsert;
+
+/** Publishes one tour's steps into its own diagnostic layer. */
+function publishTour(tourId) {
+    const tour = tours.get(tourId);
+    if (!tour) return;
+    diagnostics.publish(
+        layerFor(tourId),
+        tour.steps.map((s) => ({ ...s, message: s.stepTitle })),
+        tour.title,
+    );
+}
+
+function layerFor(tourId) {
+    return `tour:${tourId}`;
 }
 
 // --- navigation -------------------------------------------------------------
 
 async function goto(index) {
-    if (!isActive()) {
+    const tour = active();
+    if (!tour) {
         vscode.window.showInformationMessage("porthole: no tour is running.");
         return false;
     }
-    if (index < 0 || index >= steps.length) return false;
+    if (index < 0 || index >= tour.steps.length) return false;
 
-    current = index;
-    changed();
-    return revealStep(steps[index]);
+    tour.current = index;
+    tour.updatedAt = new Date().toISOString();
+    changed({ persist: tour.tourId });
+    return revealStep(tour.steps[index]);
 }
 
 async function step(delta) {
-    if (!isActive()) {
+    const tour = active();
+    if (!tour) {
         vscode.window.showInformationMessage("porthole: no tour is running.");
         return;
     }
     // Wraps, so stepping past the end returns to the start rather than
     // dead-ending on the last step.
-    await goto((current + delta + steps.length) % steps.length);
+    await goto((tour.current + delta + tour.steps.length) % tour.steps.length);
+}
+
+/**
+ * Switches which tour is being walked.
+ *
+ * The tour being switched away from stays in the library and in the Problems
+ * panel; only the gutter, the lenses and the status bar follow the active one.
+ */
+async function activateTour(tourId, stepIndex) {
+    const tour = tours.get(tourId);
+    if (!tour) return { ok: false, error: `no tour called '${tourId}' is loaded` };
+
+    activeTourId = tourId;
+    const index = Number.isInteger(stepIndex)
+        ? Math.max(0, Math.min(tour.steps.length - 1, stepIndex))
+        : tour.current >= 0
+          ? tour.current
+          : 0;
+
+    await goto(index);
+    diag(`tour activated: ${tourId} at step ${index + 1}/${tour.steps.length}`);
+    return {
+        ok: true,
+        result: { tourId, title: tour.title, steps: tour.steps.length, current: tour.current },
+    };
+}
+
+/**
+ * Stops walking a tour without unloading it.
+ *
+ * It stays in the library, on disk, and in the Problems panel - closing is
+ * "I have finished with this for now", not "throw it away".
+ */
+function close(tourId) {
+    const id = tourId || activeTourId;
+    if (!id) return { ok: false, error: "no tour is active" };
+    if (!tours.has(id)) return { ok: false, error: `no tour called '${id}' is loaded` };
+
+    if (activeTourId === id) {
+        activeTourId = null;
+        clearDecorations();
+    }
+    changed();
+    return { ok: true, result: { tourId: id, library: tours.size } };
+}
+
+/** Stops walking whatever is active. The pre-library name for `close`. */
+function exit() {
+    if (!activeTourId) return { ok: true, result: { library: tours.size } };
+    return close(activeTourId);
+}
+
+/** Unloads every tour, and forgets the library. Does not touch what is on disk. */
+function closeAll() {
+    const count = tours.size;
+    for (const tourId of tours.keys()) diagnostics.dispose(layerFor(tourId));
+    tours.clear();
+    activeTourId = null;
+    clearDecorations();
+    changed();
+    diag(`tour library cleared: ${count} unloaded`);
+    return { ok: true, result: { unloaded: count } };
+}
+
+/**
+ * Takes a tour out of the library.
+ *
+ * Deleting the file is the store's job; this drops the in-memory state and the
+ * diagnostics, which would otherwise leave the Problems panel describing a tour
+ * that no longer exists.
+ */
+function unload(tourId) {
+    if (!tours.has(tourId)) return false;
+    diagnostics.dispose(layerFor(tourId));
+    tours.delete(tourId);
+    if (activeTourId === tourId) {
+        activeTourId = null;
+        clearDecorations();
+    }
+    changed();
+    return true;
+}
+
+/**
+ * Puts a tour into the library without going through resolution.
+ *
+ * Used when loading from disk, where the steps have already been resolved and
+ * re-anchored by the store.
+ */
+function adopt(tour) {
+    if (!tour || !tour.tourId || !Array.isArray(tour.steps) || tour.steps.length === 0) {
+        return false;
+    }
+    if (!tours.has(tour.tourId) && tours.size >= MAX_TOURS) return false;
+
+    tours.set(tour.tourId, {
+        ...tour,
+        steps: tour.steps.map((s, i) => normalise(s, i)),
+        current: Number.isInteger(tour.current) ? tour.current : -1,
+    });
+    publishTour(tour.tourId);
+    changed();
+    return true;
 }
 
 async function revealStep(entry) {
@@ -212,21 +470,13 @@ async function revealStep(entry) {
     return true;
 }
 
-function exit() {
-    steps = [];
-    current = -1;
-    title = null;
-    diagnostics.clear("tour");
-    clearDecorations();
-    changed();
-    return { ok: true };
-}
-
 async function list() {
-    if (!isActive()) {
+    const tour = active();
+    if (!tour) {
         vscode.window.showInformationMessage("porthole: no tour is running.");
         return;
     }
+    const { steps, current } = tour;
     const picked = await vscode.window.showQuickPick(
         steps.map((s) => ({
             label: `${s.index === current ? "$(play)" : "$(circle-outline)"} ${s.index + 1}. ${s.stepTitle}`,
@@ -234,9 +484,34 @@ async function list() {
             detail: firstLine(s.narration),
             index: s.index,
         })),
-        { title: title || "porthole tour", placeHolder: "Jump to a step", matchOnDetail: true },
+        { title: tour.title || "porthole tour", placeHolder: "Jump to a step", matchOnDetail: true },
     );
     if (picked) await goto(picked.index);
+}
+
+/**
+ * Switching tours, from the keyboard.
+ *
+ * The sidebar shows the library, but a quick-pick is what you reach for when
+ * you are already reading code and do not want to leave it.
+ */
+async function switchTour() {
+    if (tours.size === 0) {
+        vscode.window.showInformationMessage(
+            "porthole: no tours are loaded. Ask Copilot to walk you through something.",
+        );
+        return;
+    }
+    const picked = await vscode.window.showQuickPick(
+        [...tours.values()].map((t) => ({
+            label: `${t.tourId === activeTourId ? "$(play)" : "$(compass)"} ${t.title}`,
+            description: `${t.steps.length} steps`,
+            detail: t.tourId === activeTourId ? "currently active" : t.tourId,
+            tourId: t.tourId,
+        })),
+        { title: "porthole: tours", placeHolder: "Switch to a tour", matchOnDetail: true },
+    );
+    if (picked) await activateTour(picked.tourId);
 }
 
 // --- gutter -----------------------------------------------------------------
@@ -272,14 +547,22 @@ function applyTo(editor) {
     if (!editor) return;
     if (!decorations) buildDecorations();
 
-    const mine = steps.filter((s) => samePath(s.file, editor.document.uri.fsPath));
+    const tour = active();
+    // The gutter follows the active tour only. Painting every loaded tour would
+    // put three different "step 1" markers on the same line with no way to tell
+    // which walk they belong to; the Problems panel is where the whole library
+    // is visible at once.
+    const mine = tour
+        ? tour.steps.filter((s) => samePath(s.file, editor.document.uri.fsPath))
+        : [];
+    const current = tour ? tour.current : -1;
     const buckets = { current: [], visited: [], pending: [] };
 
     for (const s of mine) {
         const bucket = s.index === current ? "current" : s.index < current ? "visited" : "pending";
         buckets[bucket].push({
             range: clampRange(editor.document, s.startLine, s.endLine, 1, undefined),
-            hoverMessage: hover(s),
+            hoverMessage: hover(s, tour),
         });
     }
 
@@ -296,14 +579,33 @@ function samePath(a, b) {
     return String(a).toLowerCase() === String(b).toLowerCase();
 }
 
-function hover(s) {
+function hover(s, tour) {
     const md = new vscode.MarkdownString();
     // Never trusted: the narration is model-written, and a trusted
     // MarkdownString can embed command links.
     md.isTrusted = false;
-    md.appendMarkdown(`**Step ${s.index + 1}/${steps.length}** · ${s.stepTitle}\n\n`);
+    const total = tour ? tour.steps.length : 0;
+    if (tour?.title) md.appendMarkdown(`_${tour.title}_\n\n`);
+    md.appendMarkdown(`**Step ${s.index + 1}/${total}** · ${s.stepTitle}\n\n`);
     if (s.narration) md.appendMarkdown(s.narration);
+    const note = staleNote(s.status);
+    if (note) md.appendMarkdown(`\n\n${note}`);
     return md;
+}
+
+/**
+ * Said here rather than baked into the narration.
+ *
+ * Appending it to the stored text would mean the note was saved back with the
+ * tour and appended again on the next load, so a tour read three times would
+ * carry three copies of the same warning.
+ */
+function staleNote(status) {
+    if (status === "shifted") return "_(this code moved since the tour was saved)_";
+    if (status === "changed") {
+        return "_(the code here has changed since the tour was saved, so this step may no longer apply)_";
+    }
+    return "";
 }
 
 // --- code lens --------------------------------------------------------------
@@ -317,7 +619,10 @@ const lensProvider = {
     onDidChangeCodeLenses: lensChanged.event,
 
     provideCodeLenses(document) {
-        if (!isActive()) return [];
+        const tour = active();
+        if (!tour || tour.steps.length === 0) return [];
+
+        const { steps, current } = tour;
         const mine = steps.filter((s) => samePath(s.file, document.uri.fsPath));
         const lenses = [];
 
@@ -329,7 +634,7 @@ const lensProvider = {
             if (s.index !== current) {
                 lenses.push(
                     new vscode.CodeLens(range, {
-                        title: `$(circle-outline) Step ${position} — ${s.stepTitle}`,
+                        title: `${s.status === "changed" ? "$(warning)" : "$(circle-outline)"} Step ${position} — ${s.stepTitle}`,
                         command: "porthole.tour.goto",
                         arguments: [s.index],
                     }),
@@ -341,8 +646,7 @@ const lensProvider = {
                 new vscode.CodeLens(range, {
                     title: `$(play) Step ${position} — ${lensText(s)}`,
                     command: "porthole.tour.list",
-                }),
-                new vscode.CodeLens(range, {
+                }),                new vscode.CodeLens(range, {
                     title: "$(arrow-right) Next",
                     command: "porthole.tour.next",
                 }),
@@ -352,6 +656,16 @@ const lensProvider = {
                 }),
                 new vscode.CodeLens(range, { title: "$(x) Exit", command: "porthole.tour.exit" }),
             );
+
+            // Only worth the line when there is somewhere else to switch to.
+            if (tours.size > 1) {
+                lenses.push(
+                    new vscode.CodeLens(range, {
+                        title: `$(list-unordered) ${tours.size} tours`,
+                        command: "porthole.tour.switch",
+                    }),
+                );
+            }
         }
         return lenses;
     },
@@ -380,13 +694,28 @@ function shortName(file) {
 
 function updateStatusBar() {
     if (!statusBar) return;
-    if (!isActive()) {
+    const tour = active();
+    if (!tour) {
+        // Still worth showing that tours are waiting - otherwise a library
+        // loaded from disk is invisible until you find the sidebar.
+        if (tours.size > 0) {
+            statusBar.text = `$(compass) porthole: ${tours.size} tour${tours.size === 1 ? "" : "s"}`;
+            statusBar.tooltip = "Click to pick a tour to walk.";
+            statusBar.command = "porthole.tour.switch";
+            statusBar.show();
+            return;
+        }
         statusBar.hide();
         return;
     }
+
+    const { steps, current } = tour;
     const position = current >= 0 ? `${current + 1}/${steps.length}` : `${steps.length} steps`;
     statusBar.text = `$(play) porthole: Step ${position}`;
-    statusBar.tooltip = `${title || "porthole tour"}\n\nClick for the next step.`;
+    statusBar.tooltip =
+        `${tour.title || "porthole tour"}\n\nClick for the next step.` +
+        (tours.size > 1 ? `\n\n${tours.size} tours loaded.` : "");
+    statusBar.command = "porthole.tour.next";
     statusBar.show();
 }
 
@@ -410,12 +739,36 @@ function activate(context) {
         vscode.commands.registerCommand("porthole.tour.next", () => step(1)),
         vscode.commands.registerCommand("porthole.tour.previous", () => step(-1)),
         vscode.commands.registerCommand("porthole.tour.goto", (index) => goto(index)),
-        vscode.commands.registerCommand("porthole.tour.exit", exit),
+        vscode.commands.registerCommand("porthole.tour.exit", () => exit()),
         vscode.commands.registerCommand("porthole.tour.list", list),
+        vscode.commands.registerCommand("porthole.tour.switch", switchTour),
+        vscode.commands.registerCommand("porthole.tour.closeAll", closeAll),
         { dispose: clearDecorations },
     );
 
     void vscode.commands.executeCommand("setContext", "porthole.tourActive", false);
+    void vscode.commands.executeCommand("setContext", "porthole.tourLibrary", false);
 }
 
-module.exports = { activate, start, exit, goto, step, getState, isActive, onDidChangeState };
+module.exports = {
+    activate,
+    // the library
+    upsert,
+    start,
+    activateTour,
+    close,
+    closeAll,
+    unload,
+    adopt,
+    getLibrary,
+    getTour,
+    has,
+    setPersistHandler,
+    // the active tour
+    exit,
+    goto,
+    step,
+    getState,
+    isActive,
+    onDidChangeState,
+};

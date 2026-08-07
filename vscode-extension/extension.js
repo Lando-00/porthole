@@ -24,6 +24,7 @@ const reveal = require("./src/reveal");
 const annotations = require("./src/annotations");
 const diagnostics = require("./src/diagnostics");
 const tour = require("./src/tour");
+const tourstore = require("./src/tourstore");
 const reviews = require("./src/reviews");
 const send = require("./src/send");
 const symbols = require("./src/symbols");
@@ -43,6 +44,9 @@ const KNOWN = new Set([
     "diagnostics",
     "tour",
     "tour-exit",
+    "tour-list",
+    "tour-activate",
+    "tour-delete",
     "review-save",
     "review-list",
     "review-load",
@@ -58,6 +62,7 @@ const PAYLOAD_OPTIONAL = new Set([
     "annotate-clear",
     "diagnostics",
     "tour-exit",
+    "tour-list",
     "review-save",
     "review-list",
 ]);
@@ -91,10 +96,19 @@ async function dispatch(route, payload) {
             return diagnostics.read(payload);
 
         case "tour":
-            return tour.start(payload);
+            return tour.upsert(payload);
 
         case "tour-exit":
-            return tour.exit();
+            return payload && payload.tourId ? tour.close(payload.tourId) : tour.exit();
+
+        case "tour-list":
+            return tourstore.list(payload);
+
+        case "tour-activate":
+            return tourstore.activateTour(payload);
+
+        case "tour-delete":
+            return tourstore.remove(payload);
 
         case "review-save":
             return reviews.save(payload);
@@ -170,6 +184,7 @@ function activate(context) {
     diagnostics.activate(context);
     annotations.activate(context);
     tour.activate(context);
+    tourstore.activate(context);
     reviews.activate(context);
     send.activate(context);
     views.activate(context);

@@ -48,17 +48,22 @@ const SEVERITY_RANK = { error: 0, warning: 1, info: 2, hint: 3 };
 let collections = new Map();
 
 /**
- * Annotations and tours are separate overlays that can be on screen at the
- * same time, so each gets its own collection. One shared collection would mean
- * starting a tour silently emptied the annotations out of the Problems panel.
+ * Annotations and each loaded tour are separate overlays that can be on screen
+ * at the same time, so each gets its own collection. One shared collection
+ * would mean starting a tour silently emptied the annotations out of the
+ * Problems panel, and loading a second tour emptied the first.
  *
- * Both still carry `source: "porthole"`, so the read side filters them out
+ * Per-tour collections are also what makes the Problems panel useful for a
+ * whole review at once: each tour groups under its own title, so the panel
+ * shows every thread of a change while only one is being walked.
+ *
+ * All still carry `source: "porthole"`, so the read side filters them out
  * together.
  */
-function collectionFor(layer) {
+function collectionFor(layer, label) {
     if (!collections.has(layer)) {
-        const label = layer === "annotations" ? SOURCE : `${SOURCE} ${layer}`;
-        collections.set(layer, vscode.languages.createDiagnosticCollection(label));
+        const name = layer === "annotations" ? SOURCE : `${SOURCE} · ${label || layer}`;
+        collections.set(layer, vscode.languages.createDiagnosticCollection(name));
     }
     return collections.get(layer);
 }
@@ -72,8 +77,8 @@ function collectionFor(layer) {
  * is small, and a stale entry left behind in the Problems panel is worse than
  * the cost of rebuilding it.
  */
-function publish(layer, entries) {
-    const collection = collectionFor(layer);
+function publish(layer, entries, label) {
+    const collection = collectionFor(layer, label);
     collection.clear();
 
     const byFile = new Map();
@@ -130,6 +135,26 @@ function firstLine(message) {
 function clear(layer) {
     const collection = collections.get(layer);
     if (collection) collection.clear();
+}
+
+/**
+ * Throws a layer away entirely.
+ *
+ * `clear` empties a collection but keeps it, which is right for a layer that
+ * will be republished. A deleted tour never comes back, and a collection per
+ * deleted tour is a leak that grows for as long as the window is open.
+ */
+function dispose(layer) {
+    const collection = collections.get(layer);
+    if (!collection) return false;
+    collection.dispose();
+    collections.delete(layer);
+    return true;
+}
+
+/** Every layer currently held, for the doctor and for tests. */
+function layers() {
+    return [...collections.keys()];
 }
 
 // --- read -------------------------------------------------------------------
@@ -265,4 +290,4 @@ function activate(context) {
     });
 }
 
-module.exports = { activate, publish, clear, read, SOURCE };
+module.exports = { activate, publish, clear, dispose, layers, read, SOURCE };

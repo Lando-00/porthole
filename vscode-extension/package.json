@@ -82,6 +82,16 @@
         "title": "porthole: Exit tour"
       },
       {
+        "command": "porthole.tour.switch",
+        "title": "porthole: Switch tour",
+        "icon": "$(list-unordered)"
+      },
+      {
+        "command": "porthole.tour.closeAll",
+        "title": "porthole: Close all tours",
+        "icon": "$(clear-all)"
+      },
+      {
         "command": "porthole.saveReview",
         "title": "porthole: Save review"
       },
