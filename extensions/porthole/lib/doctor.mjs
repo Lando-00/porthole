@@ -11,7 +11,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { config, configPath, copilotHome, loadConfig } from "./config.mjs";
-import { callCompanion, findCompanions } from "./companion.mjs";
+import { callCompanion, explain, findCompanions } from "./companion.mjs";
 import { connectedIdes, resolveEditorExe, resolveEditorTarget, whichEditor } from "./editor.mjs";
 import * as endpoint from "./endpoint.mjs";
 import { findEndpoints, portholeHome } from "./endpoint.mjs";
@@ -57,6 +57,7 @@ export async function doctor(session, ctx) {
     ides(report, cwd);
     await companion(report, cwd);
     reverseChannel(report, session, ctx);
+    await toursSection(report, cwd);
     sessionSection(report, session, ctx);
     gitSection(report, cwd);
     verdict(report);
@@ -287,6 +288,46 @@ function reverseChannel(report, session, ctx) {
     if (others.length > 0) {
         report.add("warn", `${others.length} other CLI session(s) are live`);
         report.detail("VS Code will ask which one to send to");
+    }
+}
+
+/**
+ * The walkthrough library.
+ *
+ * Worth its own section because a tour that has drifted is the failure this
+ * feature is most likely to hit in practice: the explanation is still there,
+ * still opens, and quietly describes code that has since changed.
+ */
+async function toursSection(report, cwd) {
+    report.section("tours");
+
+    const result = await callCompanion("tour-list", {}, { contextPath: cwd });
+    if (!result.ok) {
+        report.add("warn", `could not read the tour library: ${explain(result)}`);
+        return;
+    }
+
+    const list = result.result?.tours || [];
+    if (list.length === 0) {
+        report.add("info", "no tours loaded or saved");
+        return;
+    }
+
+    const loaded = list.filter((t) => t.loaded).length;
+    const active = list.find((t) => t.active);
+    report.add("ok", `${list.length} tour(s), ${loaded} loaded`);
+    report.detail(active ? `walking "${active.title}" (${active.tourId})` : "none active");
+
+    for (const t of list) {
+        const s = t.staleness;
+        if (!s) continue;
+        const drifted = (s.changed || 0) + (s.missing || 0);
+        if (drifted === 0) continue;
+        report.add(
+            "warn",
+            `"${t.title}" has ${drifted} step(s) that no longer match the code`,
+            "ask Copilot to rebuild it",
+        );
     }
 }
 

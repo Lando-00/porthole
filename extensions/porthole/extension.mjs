@@ -43,7 +43,7 @@ import { doctor, pluginVersion } from "./lib/doctor.mjs";
 import * as endpoint from "./lib/endpoint.mjs";
 import * as outbox from "./lib/outbox.mjs";
 import { problems, tools as problemTools } from "./lib/problems.mjs";
-import { exitTour, tour, tools as tourTools } from "./lib/tour.mjs";
+import { exitTour, manage, tour, tours, tools as tourTools } from "./lib/tour.mjs";
 import { review, tools as reviewTools } from "./lib/reviews.mjs";
 import { openSession, parseArgs, tools as openSessionTools } from "./lib/opensession.mjs";
 import { git, projectRoot, isGitRepo } from "./lib/git.mjs";
@@ -341,8 +341,28 @@ const session = await joinSession({
         },
         {
             name: "tour-exit",
-            description: "End the walkthrough running in VS Code",
+            description: "Stop walking the active tour. It stays in the library",
             handler: withPresence(async () => session.log(await exitTour())),
+        },
+        {
+            name: "tours",
+            description:
+                "The walkthrough library: /tours (list), /tours <id> (walk it), /tours close [id], /tours delete <id>",
+            handler: withPresence(async (ctx) => {
+                const [first, ...rest] = (ctx.args || "").trim().split(/\s+/).filter(Boolean);
+                if (!first) return session.log(await tours({}));
+
+                if (first === "close") {
+                    return session.log(await manage({ action: "close", tourId: rest[0] || "" }));
+                }
+                if (first === "delete") {
+                    if (!rest[0]) return session.log("porthole: /tours delete <id>");
+                    return session.log(await manage({ action: "delete", tourId: rest[0] }));
+                }
+                // Anything else is read as an id, because "walk that one" is
+                // overwhelmingly the common case.
+                return session.log(await manage({ action: "activate", tourId: first }));
+            }),
         },
         {
             name: "reviews",
