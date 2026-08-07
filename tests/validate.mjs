@@ -203,6 +203,22 @@ check("both halves agree on the transport directories", () => {
     return "req/ack agree";
 });
 
+check("the /cops workspace file is written somewhere trustable", () => {
+    // VS Code trusts "folders, their subfolders, and workspace files", so a
+    // workspace file inside the session folder inherits that folder's trust.
+    // One in the temp directory has to be trusted on its own, every session,
+    // and an untrusted workspace silently activates no extensions at all - so
+    // the companion never starts and nothing says why.
+    const source = readFileSync(
+        join(ROOT, "extensions/porthole/lib/opensession.mjs"),
+        "utf8",
+    );
+    if (!/const outDir = sessionFolder \|\| portholeTempDir/.test(source)) {
+        throw new Error("opensession.mjs no longer prefers the session folder for the workspace file");
+    }
+    return "session folder, falling back to temp";
+});
+
 check("the publisher matches the hardcoded URI authority", () => {
     // The CLI fires vscode://<publisher>.<name>/<route>, lower-cased, and that
     // authority is a constant in companion.mjs. Publishing under a different

@@ -12,9 +12,9 @@
 
 import { existsSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
-import { callCompanion } from "./companion.mjs";
+import { callCompanion, findCompanions } from "./companion.mjs";
 import { config, copilotHome } from "./config.mjs";
 import { launchEditor, resolveEditorTarget } from "./editor.mjs";
 import { projectRoot } from "./git.mjs";
@@ -200,8 +200,23 @@ export function planOpenSession(session, ctx, options = {}) {
 
     // The name is stable per project+session, so re-running focuses the same
     // window instead of piling up duplicates.
-    const outDir = portholeTempDir("porthole-workspaces", { create: false });
-    plan.workspaceFile = join(outDir, `${safeName(projectName)}-${shortId(sessionId)}.code-workspace`);
+    //
+    // It lives in the session folder rather than the temp directory, and that
+    // is a workspace-trust decision rather than a tidiness one. VS Code trusts
+    // "folders, their subfolders, and workspace files" - so a workspace file
+    // inside an already-trusted folder is trusted with it, while one in the
+    // temp directory has to be trusted on its own, every session, forever.
+    //
+    // The cost of getting this wrong is not a dialog. An untrusted workspace
+    // silently does not activate extensions, so the companion never starts,
+    // every route times out, and nothing says why.
+    const outDir = sessionFolder || portholeTempDir("porthole-workspaces", { create: false });
+    plan.workspaceFile = join(
+        outDir,
+        sessionFolder
+            ? `${safeName(projectName)}.code-workspace`
+            : `${safeName(projectName)}-${shortId(sessionId)}.code-workspace`,
+    );
     plan.workspaceExists = existsSync(plan.workspaceFile);
 
     // A workspace argument and --goto DO work together, unlike --add.
@@ -372,9 +387,9 @@ export async function openSession(session, ctx, options = {}) {
         },
     };
 
-    // Written to temp, never into the repository, so it cannot be committed by
-    // accident.
-    portholeTempDir("porthole-workspaces");
+    // Only created when the session folder is unavailable and we have fallen
+    // back to temp; the session folder itself already exists.
+    if (!plan.sessionFolder) portholeTempDir("porthole-workspaces");
     try {
         writeJson(plan.workspaceFile, workspace);
     } catch (err) {
@@ -385,10 +400,43 @@ export async function openSession(session, ctx, options = {}) {
     launchEditor(session, plan.editor.command, launchStep.args);
 
     const planNote = plan.revealPlan ? "\n  opened plan.md" : "";
+    const trustNote = await noteIfNothingCameUp(plan);
+
     return plan.sessionFolder
         ? `porthole: opened '${plan.projectName}' + the Copilot session folder in one workspace.\n` +
-              `  project: ${plan.projectRoot}\n  session: ${plan.sessionFolder}${planNote}`
-        : `porthole: opened '${plan.projectName}'. No session folder found on disk yet.`;
+              `  project: ${plan.projectRoot}\n  session: ${plan.sessionFolder}${planNote}${trustNote}`
+        : `porthole: opened '${plan.projectName}'. No session folder found on disk yet.${trustNote}`;
+}
+
+/**
+ * Says so when the new window came up without the companion.
+ *
+ * Almost always workspace trust: an untrusted workspace activates no
+ * extensions, and VS Code does that silently. Without this the window simply
+ * opens, every porthole route times out, and nothing anywhere explains why -
+ * which is a worse experience than the dialog it is trying to explain.
+ *
+ * The parent-folder hint matters. Trusting just this workspace fixes today and
+ * asks again next session; trusting the session-state folder covers every
+ * session there will ever be, because VS Code trusts "folders, their
+ * subfolders, and workspace files".
+ */
+async function noteIfNothingCameUp(plan) {
+    // Enough for the window to start and the extension host to publish, but not
+    // so long that /cops feels slow when something is genuinely wrong.
+    for (let i = 0; i < 12; i += 1) {
+        await new Promise((r) => setTimeout(r, 1000));
+        if (findCompanions().length > 0) return "";
+    }
+
+    const parent = plan.sessionFolder ? dirname(plan.sessionFolder) : null;
+    return (
+        "\n  the companion has not reported in. VS Code is probably asking whether you trust" +
+        "\n  this workspace - until you say yes it disables every extension, porthole included." +
+        (parent
+            ? `\n  Choose the parent folder (${parent}) and it will not ask again.`
+            : "")
+    );
 }
 
 // ---------------------------------------------------------------------------

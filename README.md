@@ -155,6 +155,12 @@ or find **porthole companion** in the Extensions view.
 
 Verify everything with `/porthole` in an interactive session.
 
+> **The first time `/cops` opens a new window, VS Code may ask whether you trust
+> the workspace.** Say yes — until you do, VS Code disables every extension,
+> porthole included, and does so silently. Choosing the **parent folder**
+> (`~/.copilot/session-state`) means it never asks again, because trust covers
+> a folder's subfolders and the workspace files inside them.
+
 <details>
 <summary>Building the companion from source instead</summary>
 

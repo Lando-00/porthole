@@ -205,9 +205,15 @@ async function companion(report, cwd) {
         report.add(
             "fail",
             "not running in any window",
-            "install it: cd vscode-extension && npm run install-local, then reload the VS Code window",
+            "install it: code --install-extension Lando-00.porthole-companion, then open a NEW window",
         );
-        report.detail("without it: no range selection, no annotations, no symbol lookup");
+        report.detail("without it: no range selection, no annotations, no walkthroughs");
+        // The second cause is invisible and easy to miss: VS Code disables every
+        // extension in an untrusted workspace, and says nothing about it.
+        report.detail(
+            "if it is installed, check VS Code is not asking whether you trust the workspace",
+        );
+        report.detail("a reload keeps the old build - only a new window picks up an install");
         return;
     }
 

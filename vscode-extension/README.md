@@ -294,6 +294,7 @@ The three tour keybindings only bind while a tour is running.
 | `porthole.highlight.flashDurationMs` | `2500` | `0` keeps the flash until cleared |
 | `porthole.annotations.gutterIcons` | `true` | Gutter icon beside each annotated range |
 | `porthole.annotations.autoRevealFocus` | `true` | Scroll to the focused annotation on arrival |
+| `porthole.problems.publish` | `true` | Show annotations and tour steps in the Problems panel. Each is marked on its **first line only**; turn this off for no underline at all |
 | `porthole.diagnostics` | `false` | Log to `<tmp>/porthole-companion.log` |
 
 Turn on `porthole.diagnostics` when a porthole command appears to do nothing; it

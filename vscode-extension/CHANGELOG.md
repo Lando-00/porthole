@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.1
+
+**Stopped underlining code it was only explaining.** Every annotation and tour
+step was published as a diagnostic spanning its whole range, and VS Code draws a
+diagnostic as a squiggly underline — which means "something is wrong here" in
+every editor anyone has used. A four-step walkthrough therefore covered the code
+it was explaining in warning marks, and offered a *Fix* for a piece of
+narration. Exactly backwards for a feature whose purpose is making code easier
+to read.
+
+The diagnostic now marks the **first line only**. The range was never what it
+was for: the gutter icon, the highlight and the CodeLens already show it. What
+the diagnostic adds is a row in the Problems panel and somewhere to jump to, and
+one line serves both.
+
+**New setting `porthole.problems.publish`** (default on) for anyone who would
+rather have no underline at all. Decorations, gutter icons and CodeLenses stay
+either way. It applies immediately rather than on reload, because a visual
+setting you have to restart to see is one nobody trusts they changed.
+
 ## 0.4.0
 
 **A library of tours, not one at a time.** A change worth explaining rarely has
