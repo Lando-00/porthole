@@ -3,12 +3,24 @@
 The VS Code half of [porthole](https://github.com/Lando-00/porthole), a GitHub
 Copilot CLI plugin.
 
-The CLI can ask VS Code to open a file at a line. It cannot select a range,
-leave a note on the code it is explaining, resolve a symbol, or tell you whether
-any of that worked. This extension does those things from inside the window.
+Copilot CLI can already ask VS Code to open a file at a line. It cannot select a
+range, leave a note on the code it is explaining, walk you through a change step
+by step, read what your language server is reporting, or take a selection back
+into the conversation. This extension does those things from inside the window.
 
-Install the CLI plugin as well — on its own this extension has nothing to talk
-to.
+> **This extension does nothing on its own.** It is one half of a pair — install
+> the CLI plugin too:
+>
+> ```shell
+> copilot plugin marketplace add Lando-00/porthole
+> copilot plugin install porthole@porthole-marketplace
+> ```
+>
+> Then run `/porthole` in an interactive Copilot CLI session to check both halves
+> can see each other.
+
+**Requires Windows** for the CLI half at present; macOS and Linux launcher
+support is not there yet.
 
 ## What it adds
 
@@ -53,18 +65,30 @@ checkpoints, the agent's task list grouped by status, and the tour library.
 
 ## Install
 
-```bash
-npm run install-local     # packages the VSIX and installs it into Insiders
+From the Marketplace — the Extensions view, or:
+
+```shell
+code --install-extension Lando-00.porthole-companion
+code-insiders --install-extension Lando-00.porthole-companion
 ```
 
-or grab the `.vsix` from a
-[release](https://github.com/Lando-00/porthole/releases) and:
+Or grab the `.vsix` from a
+[release](https://github.com/Lando-00/porthole/releases):
 
-```bash
+```shell
 code-insiders --install-extension porthole-companion-<version>.vsix
 ```
 
-Newly installed builds are picked up by **new windows**; reload an existing one.
+To build it yourself:
+
+```shell
+npm run install-local     # packages the VSIX and installs it into Insiders
+```
+
+> **A newly installed build is picked up by a _new window_, not a reload.**
+> VS Code resolves extension versions when a window loads, so reloading the
+> extension host respawns the version you already had. If an update appears to
+> have done nothing, this is why.
 
 ## How the CLI talks to it
 

@@ -1,24 +1,38 @@
 {
   "name": "porthole-companion",
   "displayName": "porthole companion",
-  "description": "Lets the porthole Copilot CLI plugin reveal and highlight ranges in this window.",
+  "description": "The editor half of porthole: lets Copilot CLI reveal ranges, annotate code, run narrated walkthroughs, read your Problems panel, and take a selection back into the session.",
   "version": "0.4.0",
   "publisher": "Lando-00",
   "license": "MIT",
+  "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#18202C",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Lando-00/porthole"
+    "url": "https://github.com/Lando-00/porthole.git"
   },
+  "bugs": {
+    "url": "https://github.com/Lando-00/porthole/issues"
+  },
+  "homepage": "https://github.com/Lando-00/porthole#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other"
+    "Other",
+    "Visualization",
+    "Education"
   ],
   "keywords": [
     "copilot",
-    "cli",
+    "copilot cli",
     "porthole",
+    "walkthrough",
+    "code tour",
+    "annotations",
     "highlight"
   ],
   "activationEvents": [
@@ -27,7 +41,9 @@
   ],
   "main": "./extension.js",
   "scripts": {
-    "package": "npx --yes @vscode/vsce package --allow-missing-repository --skip-license -o porthole-companion.vsix",
+    "icon": "pwsh -File scripts/make-icon.ps1",
+    "package": "npx --yes @vscode/vsce package -o porthole-companion.vsix",
+    "publish": "npx --yes @vscode/vsce publish",
     "install-local": "npm run package && code-insiders --install-extension porthole-companion.vsix --force"
   },
   "contributes": {

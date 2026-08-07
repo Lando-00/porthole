@@ -2,3 +2,4 @@
 .vscodeignore
 *.vsix
 node_modules/**
+scripts/**

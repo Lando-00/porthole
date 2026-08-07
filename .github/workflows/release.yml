@@ -42,8 +42,6 @@ jobs:
         env:
           COMPANION: ${{ env.companion }}
 
-      # No VS Code Marketplace publish: the companion is installed from the
-      # release asset, which needs no publisher account and no PAT.
       - name: Publish the release
         uses: softprops/action-gh-release@v2
         with:
@@ -62,7 +60,66 @@ jobs:
             sidebar and "Send to Copilot" all depend on:
 
             ```shell
+            code --install-extension Lando-00.porthole-companion
+            ```
+
+            Or from the asset below, if you would rather not use the
+            Marketplace:
+
+            ```shell
             code-insiders --install-extension porthole-companion-${{ env.companion }}.vsix
             ```
 
             Run `/porthole` in an interactive session to check the install.
+
+  # Separate from the release, deliberately. A Marketplace hiccup or a missing
+  # PAT must not cost us the GitHub release and its asset - that asset is the
+  # install path for anyone who does not want the Marketplace, and it is what
+  # the release notes point at.
+  marketplace:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Is a Marketplace token configured?
+        id: token
+        run: |
+          if [ -n "${VSCE_PAT}" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No VSCE_PAT secret, so the Marketplace publish was skipped. The release asset is still available."
+          fi
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      # Re-publishing a version the Marketplace already has is a hard error, and
+      # a tag can legitimately be re-pushed. Check first so that is a no-op
+      # rather than a red build.
+      - name: Is this version already published?
+        if: steps.token.outputs.present == 'true'
+        id: published
+        run: |
+          COMPANION=$(node -p "require('./vscode-extension/package.json').version")
+          echo "companion=$COMPANION" >> "$GITHUB_ENV"
+          LIVE=$(npx --yes @vscode/vsce show Lando-00.porthole-companion --json 2>/dev/null \
+                 | node -p "try{JSON.parse(require('fs').readFileSync(0,'utf8')).versions[0].version}catch{''}" || true)
+          echo "live version: '${LIVE}', building: '${COMPANION}'"
+          if [ "$LIVE" = "$COMPANION" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${COMPANION} is already on the Marketplace; nothing to publish."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to the VS Code Marketplace
+        if: steps.token.outputs.present == 'true' && steps.published.outputs.skip == 'false'
+        working-directory: vscode-extension
+        run: npx --yes @vscode/vsce publish --pat "$VSCE_PAT"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}

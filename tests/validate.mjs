@@ -203,6 +203,53 @@ check("both halves agree on the transport directories", () => {
     return "req/ack agree";
 });
 
+check("the publisher matches the hardcoded URI authority", () => {
+    // The CLI fires vscode://<publisher>.<name>/<route>, lower-cased, and that
+    // authority is a constant in companion.mjs. Publishing under a different
+    // publisher id would produce an extension that installs perfectly and
+    // answers nothing - every request would go to an authority that does not
+    // exist, and time out.
+    const manifest = JSON.parse(
+        readFileSync(join(ROOT, "vscode-extension/package.json"), "utf8"),
+    );
+    const expected = `${manifest.publisher}.${manifest.name}`.toLowerCase();
+
+    const cli = readFileSync(join(ROOT, "extensions/porthole/lib/companion.mjs"), "utf8");
+    const found = /const EXTENSION_ID = "([^"]+)"/.exec(cli);
+    if (!found) throw new Error("companion.mjs no longer declares EXTENSION_ID");
+    if (found[1] !== expected) {
+        throw new Error(
+            `manifest publishes as '${expected}' but the CLI addresses '${found[1]}'`,
+        );
+    }
+    return expected;
+});
+
+check("the extension is packaged for the Marketplace", () => {
+    // Each of these is silently accepted by `vsce package` and rejected, or
+    // quietly degraded, by the gallery.
+    const dir = join(ROOT, "vscode-extension");
+    const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+
+    if (!manifest.icon) throw new Error("no icon; the gallery shows a placeholder");
+    if (!manifest.icon.endsWith(".png")) throw new Error("the icon must be a PNG; SVG is rejected");
+    if (!existsSync(join(dir, manifest.icon))) throw new Error(`${manifest.icon} is missing`);
+    if (!existsSync(join(dir, "LICENSE"))) {
+        throw new Error("no LICENSE beside the manifest; the gallery shows 'none'");
+    }
+    if (!Array.isArray(manifest.categories)) throw new Error("categories must be an array");
+    if (!manifest.repository?.url?.endsWith(".git")) {
+        throw new Error("repository.url should end in .git for the gallery to link it");
+    }
+    // These two suppress the very checks above. Once the files exist they are
+    // not just redundant, they would hide a regression.
+    const script = manifest.scripts?.package || "";
+    if (/--skip-license|--allow-missing-repository/.test(script)) {
+        throw new Error("the package script still suppresses Marketplace warnings");
+    }
+    return `${manifest.icon}, LICENSE, ${manifest.categories.length} categories`;
+});
+
 check("the tour storage path matches the spec", () => {
     // The spec is what both halves are written against, and a tour written to a
     // path the spec does not describe is a tour the CLI will never find.
