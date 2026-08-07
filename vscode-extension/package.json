@@ -2,7 +2,7 @@
   "name": "porthole-companion",
   "displayName": "porthole companion",
   "description": "Lets the porthole Copilot CLI plugin reveal and highlight ranges in this window.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "Lando-00",
   "license": "MIT",
   "repository": {

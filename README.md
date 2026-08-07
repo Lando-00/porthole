@@ -31,7 +31,8 @@ same behaviour every time, no model in the loop, no tokens spent.
 | `/annotate-clear` | Remove every annotation |
 | `/problems` | What VS Code is reporting right now: errors, warnings, type errors |
 | `/reviews` | List saved review findings; `load <name>` to bring one back |
-| `/tour-exit` | End a running walkthrough |
+| `/tours` | The walkthrough library; `/tours <id>` to walk one, `close`, `delete <id>` |
+| `/tour-exit` | Stop walking the active tour (it stays in the library) |
 | `/porthole` | Diagnose everything: config, editors, connected windows, companion, session, git |
 
 **Agent-driven** — skills, where interpretation is the point.
@@ -47,7 +48,7 @@ same behaviour every time, no model in the loop, no tokens spent.
 
 ## Tools Copilot can call
 
-Five tools are registered with the agent, so it can drive your editor mid-answer
+Eight tools are registered with the agent, so it can drive your editor mid-answer
 without you typing anything.
 
 | Tool | What it does |
@@ -55,12 +56,40 @@ without you typing anything.
 | `porthole_annotate` | Marks the exact lines it is describing, with a message on hover |
 | `porthole_goto` | Opens a file, a range or a symbol, optionally annotating it |
 | `porthole_tour` | A narrated, ordered walkthrough you step through with Next/Prev |
+| `porthole_tours` | Lists the walkthrough library, and says which ones have gone stale |
+| `porthole_tour_manage` | Switches, closes or deletes a walkthrough by id |
 | `porthole_problems` | Reads your Problems panel, so it stops guessing at compile errors |
 | `porthole_review` | Saves findings and loads them back, even in a later session |
 | `porthole_open_session` | `/cops`, on request — described so the agent only opens your editor when you ask |
 
 Ask *"walk me through how a porthole request reaches VS Code"* and the relevant
 ranges light up in the editor as the explanation arrives.
+
+### A library of walkthroughs
+
+A change worth explaining rarely has one thread. A pull request has the auth
+path, the error handling and the migration — so porthole holds **many tours at
+once, with one active**.
+
+- The **active** tour owns the gutter, the CodeLenses and the status bar. You
+  can only follow one path with your eyes at a time.
+- **Every loaded** tour appears in the Problems panel, grouped under its own
+  name. The panel becomes the map of the change; the active tour is where you
+  are standing in it.
+- The **sidebar** lists them all. Click one to walk it; inline buttons stop or
+  delete it.
+- `Alt+]` / `Alt+[` step through the active tour.
+
+Tours are saved into the session folder automatically, so closing the window
+does not lose them, and a later session can pick one up — *"walk me through the
+review you saved yesterday"*.
+
+Because line numbers rot, every step records a hash of the code it was written
+about. When a tour is reopened, each step is either found where it was, found
+nearby and quietly re-pointed, or **flagged as no longer matching** — in the
+gutter, in the sidebar, and in what the agent is told. A walkthrough that has
+gone out of date says so rather than confidently describing code that has since
+changed.
 
 ### plan.md opens itself
 

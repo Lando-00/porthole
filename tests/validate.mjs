@@ -203,6 +203,55 @@ check("both halves agree on the transport directories", () => {
     return "req/ack agree";
 });
 
+check("the tour storage path matches the spec", () => {
+    // The spec is what both halves are written against, and a tour written to a
+    // path the spec does not describe is a tour the CLI will never find.
+    const spec = readFileSync(join(ROOT, "docs/PROTOCOL.md"), "utf8");
+    if (!spec.includes("<sessionDir>/porthole/tours/<tourId>.json")) {
+        throw new Error("docs/PROTOCOL.md no longer documents where tours are stored");
+    }
+
+    const store = readFileSync(join(ROOT, "vscode-extension/src/tourstore.js"), "utf8");
+    if (!/join\(sessionDir,\s*"porthole",\s*"tours"\)/.test(store)) {
+        throw new Error("tourstore.js does not write to <sessionDir>/porthole/tours");
+    }
+    return "sessionDir/porthole/tours";
+});
+
+check("a tour id means the same thing everywhere", () => {
+    // The id is the registry key, the filename and the diagnostic layer name.
+    // Three different notions of what is allowed would mean a tour that can be
+    // created but never saved, or saved but never deleted.
+    const sources = {
+        "tour.js": "vscode-extension/src/tour.js",
+        "tourstore.js": "vscode-extension/src/tourstore.js",
+    };
+    for (const [name, relPath] of Object.entries(sources)) {
+        const source = readFileSync(join(ROOT, relPath), "utf8");
+        if (!source.includes("[\\w-]{1,64}") && !source.includes("normaliseSlug")) {
+            throw new Error(`${name} does not use the shared tour id rule`);
+        }
+    }
+
+    const spec = readFileSync(join(ROOT, "docs/PROTOCOL.md"), "utf8");
+    if (!spec.includes("^[\\w-]{1,64}$")) {
+        throw new Error("docs/PROTOCOL.md does not state the tour id rule");
+    }
+    return "[\\w-]{1,64} everywhere";
+});
+
+check("closing a tour is not the same as deleting it", () => {
+    // The distinction is the whole reason a library is safe to use: closing is
+    // "I have finished with this for now". If tour-exit ever started removing
+    // files, a user would lose work by tidying up.
+    const source = readFileSync(join(ROOT, "vscode-extension/src/tour.js"), "utf8");
+    const close = source.slice(source.indexOf("function close("), source.indexOf("function exit("));
+    if (/rmSync|unlinkSync|fs\.rm/.test(close)) {
+        throw new Error("tour.js close() touches the filesystem; closing must not delete");
+    }
+    return "close leaves the file alone";
+});
+
 // ---------------------------------------------------------------------------
 
 console.log(checks.join("\n"));

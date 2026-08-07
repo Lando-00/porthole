@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.4.0
+
+**A library of tours, not one at a time.** A change worth explaining rarely has
+one thread: a pull request has the auth path, the error handling and the
+migration. Until now, starting a second tour destroyed the first, and two CLI
+sessions sharing a window clobbered each other silently. Tours are now held in a
+registry keyed by a short id, and up to thirty can be loaded at once.
+
+Exactly one is **active**. You can only follow one path with your eyes at a
+time, and one gutter cannot legibly carry three different "step 1" markers — so
+the active tour owns the gutter, the CodeLenses and the status bar, while every
+loaded tour publishes into its own diagnostic collection. The Problems panel
+becomes the map of a change, grouped by tour name; the active tour is where you
+are standing in it.
+
+**Tours survive the window closing.** They are written to
+`<sessionDir>/porthole/tours/<tourId>.json` on creation and on every cursor
+move, debounced, and this session's tours are restored when the window reopens —
+without activating any of them, because reopening a window should show you what
+you had, not decide what you are looking at. Tours from other sessions are found
+by `tour-list` and loaded on demand, which is what makes "pick up yesterday's
+review" work.
+
+**And they admit when they have gone stale.** Every step records a hash of the
+code it was written about. On load, each is classified `resolved`, `shifted`
+(found nearby and quietly re-pointed), `changed` or `missing`, and the *resolved*
+range is what everything downstream is given. A changed step is warned about in
+the gutter, in the sidebar, in the hover and in what the agent is told. The
+anchoring itself moved into a shared module, since saved reviews had solved the
+identical problem and two copies of a staleness check will drift.
+
+**The sidebar shows the library.** Tours at the root, steps beneath, the active
+one expanded — with inline actions to walk, stop or delete. A single tour still
+shows its steps directly; the folder only earns its place once there is a choice
+to make. New: `porthole: Switch tour`, `Close all tours`, `Walk this tour`,
+`Stop walking this tour`, `Delete tour`.
+
+**Closing is not deleting.** `Alt+Escape` and `tour-exit` stop walking a tour but
+leave it in the library, in the Problems panel and on disk. Only `tour-delete`
+removes it, and the sidebar confirms first.
+
+New routes: `tour-list`, `tour-activate`, `tour-delete`. `tour` gains `tourId`,
+`activate` and `replace`; `tour-exit` gains an optional `tourId`. Pre-0.4.0
+callers are unaffected — a `tour` call without an id still creates and starts a
+tour.
+
 ## 0.3.0
 
 **Diagnostics bridge, both directions.** Annotations are now published as real

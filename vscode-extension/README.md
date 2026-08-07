@@ -27,6 +27,14 @@ source. Its own annotations are excluded from that answer.
 narration and controls in a CodeLens above each step, gutter markers showing
 progress, and the whole path in the sidebar. `Alt+]` / `Alt+[` to step.
 
+**A library of walkthroughs.** Many tours loaded at once, one active. The active
+one owns the gutter and the lenses; every loaded one appears in the Problems
+panel under its own name, so a pull request with three threads reads as three
+tours rather than one fifty-step list. Tours are saved into the session folder
+automatically and restored when the window reopens — and, because line numbers
+rot, each step carries a hash of the code it was written about, so a tour that
+has gone out of date says so instead of describing whatever now sits there.
+
 **Saved reviews.** Save the current findings and load them again later, even
 from a different session. Findings carry a hash of the code they describe, so a
 review that has gone stale says so instead of marking innocent lines.
@@ -41,7 +49,7 @@ session as a prompt.
 language server when it is warm and a definition scan when it is not.
 
 **A sidebar.** The current Copilot session, the project and branch, plan.md and
-checkpoints, the agent's task list grouped by status, and the running tour.
+checkpoints, the agent's task list grouped by status, and the tour library.
 
 ## Install
 
@@ -187,17 +195,37 @@ what is on screen, whereas a cold workspace may never have been indexed.
 ### `tour`
 
 ```jsonc
-{ "title": "how a request reaches the editor",
+{ "tourId": "auth-path",              // optional; derived from the title
+  "title": "how a request reaches the editor",
+  "activate": true,                   // start walking it now, default true
+  "replace": true,                    // false refuses an id already loaded
   "steps": [ { "file": "src/tour.js", "startLine": 120, "endLine": 145,
                "stepTitle": "the entry point", "narration": "...",
                "severity": "info" } ] }
 ```
 
-1–50 steps. `file` may be absolute or relative to a workspace folder, and must
-exist — a step that cannot be resolved is reported in
-`result.skipped`, never silently dropped. Acks `{ ok, result: { steps, skipped } }`.
+1–50 steps per tour, up to 30 tours loaded. `file` may be absolute or relative
+to a workspace folder, and must exist — a step that cannot be resolved is
+reported in `result.skipped`, never silently dropped. Acks
+`{ ok, result: { tourId, replaced, steps, active, library, skipped } }`.
 
-`tour-exit` takes no payload and ends the tour.
+### `tour-list` / `tour-activate` / `tour-delete`
+
+`tour-list` takes `{ includeSteps, repo, limit }` and merges what is loaded with
+what is saved across **every** session folder, so a later session can find an
+earlier one's walkthroughs. Acks `{ tours, activeTourId, loaded }`.
+
+`tour-activate` takes `{ tourId, step }`, loading the tour from disk first if it
+is not in memory. Acks the tour plus a `staleness` tally when it came off disk.
+
+`tour-delete` takes `{ tourId }` and removes it from the library *and* from
+disk. `tour-exit` — with an optional `{ tourId }` — only stops walking it;
+closing is not deleting.
+
+Tours are written to `<sessionDir>/porthole/tours/<tourId>.json` automatically,
+debounced, on creation and on every cursor move. Each step stores a hash of the
+code it describes, so loading can report it as `resolved`, `shifted` (found
+nearby and re-pointed), `changed` or `missing`.
 
 ### `review-save` / `review-list` / `review-load`
 
@@ -220,8 +248,12 @@ session's reviews folder or it is refused.
 | `porthole: Next annotation` / `Previous annotation` | Steps through the set |
 | `porthole: List annotations` | Quick-pick to jump to one (also the status bar click) |
 | `porthole: Next tour step` / `Previous tour step` | `Alt+]` / `Alt+[` |
-| `porthole: List tour steps` | Quick-pick over the walkthrough |
-| `porthole: Exit tour` | `Alt+Escape` |
+| `porthole: List tour steps` | Quick-pick over the active walkthrough |
+| `porthole: Switch tour` | Quick-pick over the whole library |
+| `porthole: Walk this tour` / `Stop walking this tour` | Also inline in the sidebar |
+| `porthole: Delete tour` | Removes it from the library and from disk; confirms first |
+| `porthole: Exit tour` | `Alt+Escape` — stops walking, keeps the tour |
+| `porthole: Close all tours` | Unloads the library; leaves the files alone |
 | `porthole: Save review` / `Load review` | Persist and restore findings |
 | `porthole: Send selection to Copilot` | `Ctrl+Alt+.`, also on the editor context menu |
 | `porthole: Clear highlight` | Removes the reveal flash |
@@ -252,8 +284,11 @@ checkpoint count. Items open what they name.
 `blocked`, `done`), with the description as a tooltip and `depends on:` children
 for blocked work.
 
-**Tour** — the steps of the running walkthrough, current step highlighted, click
-to jump. Empty until the agent starts one.
+**Tours** — every walkthrough loaded in this window. The active one is expanded
+and shows where you are in it; the rest are collapsed, and clicking one starts
+walking it. A tour whose code has moved on says how many steps are stale, and
+those steps carry a warning icon. A single tour skips the folder and shows its
+steps directly. Empty until the agent creates one.
 
 Both read the session folder, found either from a workspace folder under
 `~/.copilot/session-state` (what `/cops` produces) or from a session holding a
