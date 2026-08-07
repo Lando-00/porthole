@@ -1,5 +1,8 @@
 # porthole
 
+[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/Lando-00.porthole-companion?label=companion&logo=visualstudiocode)](https://marketplace.visualstudio.com/items?itemName=Lando-00.porthole-companion)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/Lando-00.porthole-companion)](https://marketplace.visualstudio.com/items?itemName=Lando-00.porthole-companion)
+
 A window from your [GitHub Copilot CLI](https://docs.github.com/copilot/concepts/agents/copilot-cli/about-copilot-cli)
 session into VS Code.
 
@@ -140,15 +143,42 @@ copilot plugin marketplace add Lando-00/porthole
 copilot plugin install porthole@porthole-marketplace
 ```
 
-Then install the companion VS Code extension — annotations, range selection,
-symbol lookup and the sidebar all live there:
+Then the companion VS Code extension — annotations, walkthroughs,
+Problems-panel access, saved reviews, symbol lookup and the sidebar all live
+there:
+
+```shell
+code-insiders --install-extension Lando-00.porthole-companion
+```
+
+or find **porthole companion** in the Extensions view.
+
+Verify everything with `/porthole` in an interactive session.
+
+<details>
+<summary>Building the companion from source instead</summary>
 
 ```shell
 cd vscode-extension
 npm run install-local
 ```
 
-Verify everything with `/porthole` in an interactive session.
+A newly installed build is picked up by a **new window**, not a reload — VS Code
+resolves extension versions when a window loads.
+</details>
+
+## Updating
+
+```shell
+copilot plugin update porthole@porthole-marketplace
+```
+
+The companion updates itself from the Marketplace like any other extension.
+
+> **Run the plugin update from a terminal with no Copilot CLI session open.**
+> A running session holds the plugin directory open, and the update replaces it
+> wholesale — from inside a session it fails with `Access is denied (os error 5)`,
+> which does not say what is actually wrong.
 
 ## Configuration
 

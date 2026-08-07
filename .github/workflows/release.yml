@@ -60,7 +60,7 @@ jobs:
             sidebar and "Send to Copilot" all depend on:
 
             ```shell
-            code --install-extension Lando-00.porthole-companion
+            code-insiders --install-extension Lando-00.porthole-companion
             ```
 
             Or from the asset below, if you would rather not use the
@@ -76,6 +76,17 @@ jobs:
   # PAT must not cost us the GitHub release and its asset - that asset is the
   # install path for anyone who does not want the Marketplace, and it is what
   # the release notes point at.
+  #
+  # DORMANT AS OF 0.7.0, and not by choice. Azure DevOps retired global PATs on
+  # 15 March 2026, and "All accessible organizations" - which the VS Code docs
+  # still instruct you to select - can no longer be created. Whether vsce
+  # accepts an organization-scoped token is an open question:
+  # https://github.com/microsoft/vscode/issues/322741
+  #
+  # So 0.4.0 was published by hand, by uploading the VSIX at
+  # https://marketplace.visualstudio.com/manage/publishers/Lando-00, which needs
+  # no token at all. This job stays here, and stays a no-op, until VSCE_PAT can
+  # be set to something that works.
   marketplace:
     needs: release
     runs-on: ubuntu-latest
