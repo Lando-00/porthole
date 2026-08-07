@@ -13,22 +13,22 @@
 // edits, line 25 may be something else entirely, and showing a finding against
 // innocent code is the worst thing a review tool can do. Every finding
 // therefore carries a hash of the text it was written about, and loading
-// reports how many still apply.
+// reports how many still apply. That machinery lives in ./anchors, because
+// saved tours need exactly the same thing.
 
-const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
 const vscode = require("vscode");
 
 const { diag } = require("./log");
+const anchors = require("./anchors");
 const annotations = require("./annotations");
 const tour = require("./tour");
 const { findSession, sessionRoot } = require("./session");
 
 const SCHEMA = 1;
 const SLUG_PATTERN = /^[\w-]{1,64}$/;
-const SEARCH_WINDOW = 200;
 
 // --- saving -----------------------------------------------------------------
 
@@ -124,34 +124,9 @@ function toFinding(f, repo) {
     if (f.stepTitle) out.stepTitle = f.stepTitle;
     if (f.narration) out.narration = f.narration;
 
-    const anchor = anchorFor(f.file, f.startLine, f.endLine);
+    const anchor = anchors.anchorFor(f.file, f.startLine, f.endLine);
     if (anchor) out.anchor = anchor;
     return out;
-}
-
-/** A hash of the exact text, so a later load can tell whether it still holds. */
-function anchorFor(file, startLine, endLine) {
-    const lines = readLines(file);
-    if (!lines) return null;
-    const slice = lines.slice(startLine - 1, endLine);
-    if (slice.length === 0) return null;
-    return {
-        sha256: hash(slice),
-        firstLine: slice[0].trim().slice(0, 200),
-        lastLine: slice[slice.length - 1].trim().slice(0, 200),
-    };
-}
-
-function hash(lines) {
-    return crypto.createHash("sha256").update(lines.join("\n"), "utf8").digest("hex");
-}
-
-function readLines(file) {
-    try {
-        return fs.readFileSync(file, "utf8").split(/\r?\n/);
-    } catch {
-        return null;
-    }
 }
 
 // --- listing ----------------------------------------------------------------
@@ -232,13 +207,13 @@ async function load(payload = {}) {
     const review = readReview(file);
     if (!review) return { ok: false, error: `could not read a review from ${file}` };
 
-    const resolution = { resolved: 0, shifted: 0, changed: 0, missing: 0 };
+    const resolution = anchors.tally();
     const entries = [];
     const resolved = [];
 
     for (const finding of review.findings || []) {
         const absolute = absoluteFile(finding.file, review.repo);
-        const state = resolveFinding(finding, absolute);
+        const state = anchors.resolve(finding, absolute);
         resolution[state.status] += 1;
 
         // The resolved range, not the stored one, is what callers get. The CLI
@@ -284,38 +259,7 @@ async function load(payload = {}) {
     };
 }
 
-/**
- * Where a finding actually is now.
- *
- * Without the anchor check this would just trust the stored line numbers and
- * cheerfully mark whatever now sits there.
- */
-function resolveFinding(finding, absolute) {
-    const fallback = { startLine: finding.startLine, endLine: finding.endLine };
-    const lines = readLines(absolute);
-    if (!lines) return { ...fallback, status: "missing" };
-    if (!finding.anchor) return { ...fallback, status: "changed" };
-
-    const span = finding.endLine - finding.startLine + 1;
-    const at = lines.slice(finding.startLine - 1, finding.endLine);
-    if (at.length === span && hash(at) === finding.anchor.sha256) {
-        return { ...fallback, status: "resolved" };
-    }
-
-    // The code usually has not gone, it has just moved. Look nearby before
-    // giving up, so an edit above a finding does not invalidate it.
-    const from = Math.max(0, finding.startLine - 1 - SEARCH_WINDOW);
-    const to = Math.min(lines.length - span, finding.startLine - 1 + SEARCH_WINDOW);
-    for (let i = from; i <= to; i += 1) {
-        const candidate = lines.slice(i, i + span);
-        if (candidate.length === span && hash(candidate) === finding.anchor.sha256) {
-            return { startLine: i + 1, endLine: i + span, status: "shifted" };
-        }
-    }
-
-    return { ...fallback, status: "changed" };
-}
-
+/** How a finding reads once we know whether it still applies. */
 function describe(finding, status) {
     const head = finding.stepTitle ? `**${finding.stepTitle}**\n\n` : "";
     const body = finding.narration || finding.message || "";
