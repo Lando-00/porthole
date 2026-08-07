@@ -139,7 +139,22 @@ function normalise(raw, index) {
         ...(["resolved", "shifted", "changed", "missing"].includes(raw.status)
             ? { status: raw.status }
             : {}),
+        // Likewise carried rather than recomputed. The anchor records what the
+        // narration was written about; re-deriving it from whatever now sits at
+        // the step would quietly turn a stale tour into a current-looking one.
+        ...(raw.anchor && raw.anchor.sha256 ? { anchor: raw.anchor } : {}),
     };
+}
+
+/**
+ * How a step should be shown, as opposed to how it was written.
+ *
+ * Derived rather than stored, for the same reason the "this code has moved"
+ * note is: a display decision written back to disk is a display decision that
+ * accumulates, and here it would also destroy the severity the caller chose.
+ */
+function displaySeverity(step) {
+    return step.status === "changed" ? "warn" : step.severity;
 }
 
 function text(value, max) {
@@ -310,7 +325,12 @@ function publishTour(tourId) {
     if (!tour) return;
     diagnostics.publish(
         layerFor(tourId),
-        tour.steps.map((s) => ({ ...s, message: s.stepTitle })),
+        tour.steps
+            // A step whose file has gone cannot be marked up. It is kept in the
+            // tour - the file may come back with the branch - but there is
+            // nothing to point at meanwhile.
+            .filter((s) => s.status !== "missing")
+            .map((s) => ({ ...s, severity: displaySeverity(s), message: s.stepTitle })),
         tour.title,
     );
 }
@@ -332,7 +352,18 @@ async function goto(index) {
     tour.current = index;
     tour.updatedAt = new Date().toISOString();
     changed({ persist: tour.tourId });
-    return revealStep(tour.steps[index]);
+
+    const entry = tour.steps[index];
+    if (entry.status === "missing") {
+        // Said once, plainly, rather than as a failure to open a file: the step
+        // is still part of the explanation, its file just is not here - a
+        // different branch, an uninitialised submodule, a moved checkout.
+        vscode.window.showInformationMessage(
+            `porthole: step ${index + 1} points at ${entry.file}, which is not in this checkout.`,
+        );
+        return false;
+    }
+    return revealStep(entry);
 }
 
 async function step(delta) {
@@ -439,11 +470,12 @@ function adopt(tour) {
     }
     if (!tours.has(tour.tourId) && tours.size >= MAX_TOURS) return false;
 
-    tours.set(tour.tourId, {
-        ...tour,
-        steps: tour.steps.map((s, i) => normalise(s, i)),
-        current: Number.isInteger(tour.current) ? tour.current : -1,
-    });
+    const steps = tour.steps.map((s, i) => normalise(s, i));
+    const current = Number.isInteger(tour.current)
+        ? Math.max(-1, Math.min(steps.length - 1, tour.current))
+        : -1;
+
+    tours.set(tour.tourId, { ...tour, steps, current });
     publishTour(tour.tourId);
     changed();
     return true;

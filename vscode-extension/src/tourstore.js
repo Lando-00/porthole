@@ -112,8 +112,20 @@ function save(tourId) {
             endLine: s.endLine,
             stepTitle: s.stepTitle,
             narration: s.narration,
+            // As authored, never the severity a stale step is *shown* with.
+            // Writing the display value back would destroy the caller's choice
+            // after a single round trip.
             severity: s.severity,
-            anchor: anchors.anchorFor(s.file, s.startLine, s.endLine) || undefined,
+            // Reused, not recomputed, when the step already has one.
+            //
+            // Recomputing looked harmless and was the worst bug in this
+            // feature: a step whose code had changed falls back to its stored
+            // range, so re-hashing would take whatever unrelated code now sits
+            // there and store it as what the narration was written about. The
+            // next load would call the tour current, the warnings would vanish,
+            // and one arrow-key press would have laundered a three-commit-old
+            // walkthrough into a trustworthy-looking one.
+            anchor: s.anchor || anchors.anchorFor(s.file, s.startLine, s.endLine) || undefined,
         })),
     };
 
@@ -196,6 +208,12 @@ function scan({ repo, sessionId } = {}) {
  * Returns the resolved steps and a tally, so a caller can say "four of these
  * nine steps no longer describe anything" instead of walking someone through
  * code that has moved on.
+ *
+ * A step whose file is not here is **kept**, not dropped. Absence is usually
+ * temporary - a different branch, an uninitialised submodule, a checkout that
+ * has moved - and dropping it would be permanent, because the next autosave
+ * writes the shortened tour back over the original. `upsert` already refuses to
+ * lose a step quietly; the load path has to hold the same line.
  */
 function resolveSteps(record) {
     const tally = anchors.tally();
@@ -205,7 +223,6 @@ function resolveSteps(record) {
         const absolute = absoluteFile(step.file, record.repo);
         const state = anchors.resolve(step, absolute);
         tally[state.status] += 1;
-        if (state.status === "missing") continue;
 
         steps.push({
             ...step,
@@ -213,9 +230,6 @@ function resolveSteps(record) {
             startLine: state.startLine,
             endLine: state.endLine,
             status: state.status,
-            // A step whose code has changed is flagged in the gutter as well as
-            // in the tally, because that is where it will actually be read.
-            severity: state.status === "changed" ? "warn" : step.severity,
         });
     }
 
@@ -328,10 +342,10 @@ function loadFromDisk(tourId) {
     if (!record) return { ok: false, error: `no tour called '${tourId}' was found` };
 
     const { steps, staleness } = resolveSteps(record);
-    if (steps.length === 0) {
+    if (steps.length === 0 || steps.every((s) => s.status === "missing")) {
         return {
             ok: false,
-            error: "none of that tour's files still exist",
+            error: "none of that tour's files are in this checkout",
             result: { tourId, staleness },
         };
     }
@@ -340,7 +354,9 @@ function loadFromDisk(tourId) {
         tourId: record.tourId,
         title: record.title,
         steps,
-        current: -1,
+        // Where the walk left off, so activating a tour resumes it rather than
+        // starting over.
+        current: record.current,
         endpointId: record.endpointId,
         repo: record.repo,
         branch: record.branch,
@@ -411,7 +427,10 @@ function restore() {
                 tourId: record.tourId,
                 title: record.title,
                 steps,
-                current: -1,
+                // Restored, so activating later resumes the walk. Restoring is
+                // not activating - the window shows you what you had, it does
+                // not decide what you are looking at.
+                current: record.current,
                 endpointId: record.endpointId,
                 repo: record.repo,
                 branch: record.branch,

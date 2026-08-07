@@ -303,7 +303,9 @@ class TourProvider {
             this.stepNode(step, isActive ? entry.current : -1, entry.steps.length, entry.tourId),
         );
 
-        const drifted = entry.steps.filter((s) => s.status === "changed").length;
+        const drifted = entry.steps.filter(
+            (s) => s.status === "changed" || s.status === "missing",
+        ).length;
         const description = isActive
             ? `${entry.current + 1}/${entry.steps.length}`
             : `${entry.steps.length} steps`;
@@ -356,10 +358,21 @@ class TourProvider {
             pending: { icon: "circle-outline", color: undefined },
         }[state];
 
-        // Drift outranks position: a step that no longer describes its code is
-        // the most important thing to know about it.
-        const icon = step.status === "changed" ? "warning" : style.icon;
-        const color = step.status === "changed" ? "charts.yellow" : style.color;
+        // Drift outranks position: a step that no longer describes its code -
+        // or whose file is not even here - is the most important thing to know
+        // about it.
+        const icon =
+            step.status === "missing"
+                ? "circle-slash"
+                : step.status === "changed"
+                  ? "warning"
+                  : style.icon;
+        const color =
+            step.status === "missing"
+                ? "charts.red"
+                : step.status === "changed"
+                  ? "charts.yellow"
+                  : style.color;
 
         const node = new Node(
             `${step.index + 1}. ${step.stepTitle}`,
@@ -367,7 +380,10 @@ class TourProvider {
             {
                 id: `tour-${tourId}-step-${step.index}`,
                 iconPath: themed(icon, color),
-                description: `${basename(step.file)}:${step.startLine}`,
+                description:
+                    step.status === "missing"
+                        ? `${basename(step.file)} — not in this checkout`
+                        : `${basename(step.file)}:${step.startLine}`,
                 command: {
                     command: "porthole.tour.jump",
                     title: "Go to step",
@@ -386,6 +402,10 @@ class TourProvider {
         } else if (step.status === "changed") {
             tooltip.appendMarkdown(
                 "\n\n_(the code here has changed since the tour was saved, so this step may no longer apply)_",
+            );
+        } else if (step.status === "missing") {
+            tooltip.appendMarkdown(
+                `\n\n_(${step.file} is not in this checkout - a different branch, perhaps)_`,
             );
         }
         node.tooltip = tooltip;

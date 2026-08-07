@@ -640,16 +640,40 @@ range is what the caller gets, never the stored one.
 
 `tour-list` reports the tally per tour, so an agent can tell that a walkthrough
 predates the current code instead of confidently pointing at whatever now sits
-at line 40. A `changed` step is also downgraded to `severity: warn` and has a
-note appended to its narration, because that is where it will actually be read.
+at line 40. A `changed` step is also shown as a warning in the gutter, the lens
+and the sidebar, because that is where it will actually be read.
+
+Two rules make that reporting trustworthy, and both were violations found in
+review rather than at design time:
+
+**An anchor is never recomputed for a step that already has one.** A `changed`
+step falls back to its stored range, so re-hashing would take whatever unrelated
+code now sits there and store it as what the narration was written about. The
+next load would call the tour current and every warning would disappear — one
+arrow-key press would launder a three-commit-old walkthrough into a
+trustworthy-looking one.
+
+**Display state is derived, never persisted.** The severity a stale step is
+*shown* with, and the "this code has moved" note, are computed at render time.
+Writing either back would destroy the severity the caller chose and accumulate a
+fresh copy of the note on every load.
+
+### A missing file is not a deleted step
+
+A step whose file cannot be found is **kept**, marked `missing`, and excluded
+from the gutter and the Problems panel — not dropped. Absence is usually
+temporary: a different branch, an uninitialised submodule, a checkout that has
+moved. Dropping it would be permanent, because the next autosave writes the
+shortened tour back over the original.
 
 ### Restoring
 
 On activation the companion loads **this session's** saved tours, and activates
 none of them. Reopening a window should show you what you had, not decide what
-you are looking at. Tours from other sessions are found by `tour-list` and
-loaded on demand by `tour-activate` — that is what makes "pick up yesterday's
-review of that pull request" work.
+you are looking at. Each tour's `current` is restored too, so activating one
+later resumes the walk rather than starting it over. Tours from other sessions
+are found by `tour-list` and loaded on demand by `tour-activate` — that is what
+makes "pick up yesterday's review of that pull request" work.
 
 ### Ownership
 

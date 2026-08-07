@@ -240,6 +240,35 @@ check("a tour id means the same thing everywhere", () => {
     return "[\\w-]{1,64} everywhere";
 });
 
+check("a saved anchor is never recomputed", () => {
+    // The worst bug in the tour library, and invisible: a step whose code had
+    // changed falls back to its stored range, so re-hashing on save would store
+    // whatever unrelated code now sits there as what the narration was written
+    // about - and the next load would call the tour current.
+    const store = readFileSync(join(ROOT, "vscode-extension/src/tourstore.js"), "utf8");
+    if (!/anchor:\s*s\.anchor\s*\|\|\s*anchors\.anchorFor/.test(store)) {
+        throw new Error("tourstore.js save() no longer reuses an existing anchor");
+    }
+
+    const tour = readFileSync(join(ROOT, "vscode-extension/src/tour.js"), "utf8");
+    if (!tour.includes("raw.anchor")) {
+        throw new Error("tour.js normalise() drops the anchor, so save() cannot reuse it");
+    }
+    return "reused, not re-derived";
+});
+
+check("a missing file does not delete the step", () => {
+    // Absence is usually temporary - another branch, an uninitialised submodule
+    // - but dropping the step is permanent, because the next autosave writes
+    // the shortened tour back over the original.
+    const store = readFileSync(join(ROOT, "vscode-extension/src/tourstore.js"), "utf8");
+    const fn = store.slice(store.indexOf("function resolveSteps("), store.indexOf("// --- routes"));
+    if (/status === "missing"\s*\)\s*continue/.test(fn)) {
+        throw new Error("resolveSteps() drops missing steps; the next save would lose them");
+    }
+    return "kept and marked";
+});
+
 check("closing a tour is not the same as deleting it", () => {
     // The distinction is the whole reason a library is safe to use: closing is
     // "I have finished with this for now". If tour-exit ever started removing
