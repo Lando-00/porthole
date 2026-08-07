@@ -3,3 +3,4 @@
 *.vsix
 node_modules/**
 scripts/**
+publisher-logo.png
