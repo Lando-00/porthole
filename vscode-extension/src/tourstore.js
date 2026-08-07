@@ -17,6 +17,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
+const vscode = require("vscode");
+
 const { diag } = require("./log");
 const anchors = require("./anchors");
 const tour = require("./tour");
@@ -434,6 +436,29 @@ function activateExtension(context) {
     tour.setPersistHandler(schedule);
     context.subscriptions.push({ dispose: flush });
 
+    context.subscriptions.push(
+        // Deleting lives here rather than in tour.js because it is the only
+        // tour operation that touches the disk.
+        vscode.commands.registerCommand("porthole.tour.delete", async (arg) => {
+            const tourId = idOf(arg);
+            if (!tourId) return;
+
+            const entry = tour.getTour(tourId);
+            const name = entry ? entry.title : tourId;
+            const confirmed = await vscode.window.showWarningMessage(
+                `Delete the tour "${name}"?`,
+                { modal: true, detail: "This removes it from the library and from disk." },
+                "Delete",
+            );
+            if (confirmed !== "Delete") return;
+
+            const result = remove({ tourId });
+            vscode.window.showInformationMessage(
+                result.ok ? `porthole: deleted '${tourId}'.` : `porthole: ${result.error}`,
+            );
+        }),
+    );
+
     // Deferred: findSession reads the workspace folders, which are not settled
     // at the instant activation runs.
     setTimeout(() => {
@@ -443,6 +468,13 @@ function activateExtension(context) {
             diag(`tour restore failed: ${err.message}`);
         }
     }, 1500);
+}
+
+/** A tour id, from either a bare string or the tree node the menu passes. */
+function idOf(arg) {
+    if (typeof arg === "string") return arg;
+    const id = arg && typeof arg.id === "string" ? arg.id : "";
+    return id.startsWith("tour-") ? id.slice("tour-".length) : "";
 }
 
 module.exports = {

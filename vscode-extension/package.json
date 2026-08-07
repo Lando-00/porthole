@@ -92,6 +92,25 @@
         "icon": "$(clear-all)"
       },
       {
+        "command": "porthole.tour.activate",
+        "title": "porthole: Walk this tour",
+        "icon": "$(play)"
+      },
+      {
+        "command": "porthole.tour.close",
+        "title": "porthole: Stop walking this tour",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "porthole.tour.jump",
+        "title": "porthole: Go to tour step"
+      },
+      {
+        "command": "porthole.tour.delete",
+        "title": "porthole: Delete tour",
+        "icon": "$(trash)"
+      },
+      {
         "command": "porthole.saveReview",
         "title": "porthole: Save review"
       },
@@ -126,7 +145,7 @@
         },
         {
           "id": "porthole.tour",
-          "name": "Tour"
+          "name": "Tours"
         }
       ]
     },
@@ -203,6 +222,30 @@
         {
           "command": "porthole.tour.goto",
           "when": "false"
+        },
+        {
+          "command": "porthole.tour.jump",
+          "when": "false"
+        },
+        {
+          "command": "porthole.tour.activate",
+          "when": "porthole.tourLibrary"
+        },
+        {
+          "command": "porthole.tour.close",
+          "when": "porthole.tourActive"
+        },
+        {
+          "command": "porthole.tour.delete",
+          "when": "porthole.tourLibrary"
+        },
+        {
+          "command": "porthole.tour.switch",
+          "when": "porthole.tourLibrary"
+        },
+        {
+          "command": "porthole.tour.closeAll",
+          "when": "porthole.tourLibrary"
         }
       ],
       "editor/context": [
@@ -219,9 +262,36 @@
           "group": "navigation"
         },
         {
+          "command": "porthole.tour.switch",
+          "when": "view == porthole.tour && porthole.tourLibrary",
+          "group": "navigation@1"
+        },
+        {
           "command": "porthole.tour.exit",
           "when": "view == porthole.tour && porthole.tourActive",
-          "group": "navigation"
+          "group": "navigation@2"
+        },
+        {
+          "command": "porthole.tour.closeAll",
+          "when": "view == porthole.tour && porthole.tourLibrary",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "porthole.tour.activate",
+          "when": "view == porthole.tour && viewItem == tourInactive",
+          "group": "inline@1"
+        },
+        {
+          "command": "porthole.tour.close",
+          "when": "view == porthole.tour && viewItem == tourActive",
+          "group": "inline@1"
+        },
+        {
+          "command": "porthole.tour.delete",
+          "when": "view == porthole.tour && viewItem =~ /^tour(Active|Inactive)$/",
+          "group": "inline@2"
         }
       ]
     }

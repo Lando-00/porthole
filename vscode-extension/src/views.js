@@ -257,11 +257,11 @@ function basename(p) {
 // ---------------------------------------------------------------------------
 
 /**
- * The whole walkthrough at a glance.
+ * The library, and the active tour's path within it.
  *
- * The CodeLens shows one step in context; this shows the shape of the entire
- * explanation, which is what tells you how much is left and lets you jump
- * back to a step you half-followed.
+ * The CodeLens shows one step in context; this shows the shape of every
+ * explanation currently loaded, which is what tells you a pull request has
+ * three threads and which one you are half-way through.
  */
 class TourProvider {
     constructor() {
@@ -280,47 +280,98 @@ class TourProvider {
     getChildren(item) {
         if (item) return item.children || [];
 
-        const { title, steps, current } = tour.getState();
-        if (steps.length === 0) {
+        const { tours, activeTourId } = tour.getLibrary();
+        if (tours.length === 0) {
             return [
-                new Node("No tour running", vscode.TreeItemCollapsibleState.None, {
+                new Node("No tours loaded", vscode.TreeItemCollapsibleState.None, {
                     iconPath: themed("compass"),
                     description: "ask Copilot to walk you through some code",
                 }),
             ];
         }
 
-        const nodes = steps.map((step) => this.stepNode(step, current, steps.length));
-        if (!title) return nodes;
+        // A single tour needs no folder to sit in - showing its steps directly
+        // is what it did before there was a library, and it is still right.
+        if (tours.length === 1) return this.tourNode(tours[0], activeTourId).children;
 
-        return [
-            new Node(title, vscode.TreeItemCollapsibleState.Expanded, {
-                iconPath: themed("compass", "charts.blue"),
-                description: `${current + 1}/${steps.length}`,
-                children: nodes,
-            }),
-        ];
+        return tours.map((t) => this.tourNode(t, activeTourId));
     }
 
-    stepNode(step, current, total) {
+    tourNode(entry, activeTourId) {
+        const isActive = entry.tourId === activeTourId;
+        const children = entry.steps.map((step) =>
+            this.stepNode(step, isActive ? entry.current : -1, entry.steps.length, entry.tourId),
+        );
+
+        const drifted = entry.steps.filter((s) => s.status === "changed").length;
+        const description = isActive
+            ? `${entry.current + 1}/${entry.steps.length}`
+            : `${entry.steps.length} steps`;
+
+        const tooltip = new vscode.MarkdownString();
+        tooltip.isTrusted = false;
+        tooltip.appendMarkdown(`**${entry.title}**\n\n`);
+        tooltip.appendMarkdown(`\`${entry.tourId}\` · ${entry.steps.length} steps`);
+        if (entry.branch) tooltip.appendMarkdown(` · ${entry.branch}`);
+        if (drifted > 0) {
+            tooltip.appendMarkdown(
+                `\n\n⚠ ${drifted} step${drifted === 1 ? "" : "s"} no longer match the code they were written about.`,
+            );
+        }
+
+        return new Node(entry.title, vscode.TreeItemCollapsibleState[isActive ? "Expanded" : "Collapsed"], {
+            id: `tour-${entry.tourId}`,
+            description: drifted > 0 ? `${description} · ${drifted} stale` : description,
+            tooltip,
+            iconPath: themed(
+                isActive ? "play-circle" : drifted > 0 ? "warning" : "compass",
+                isActive ? "charts.blue" : drifted > 0 ? "charts.yellow" : undefined,
+            ),
+            children,
+            // Drives the context menu: only an inactive tour offers "activate",
+            // only the active one offers "close".
+            contextValue: isActive ? "tourActive" : "tourInactive",
+            command: isActive
+                ? undefined
+                : {
+                      command: "porthole.tour.activate",
+                      title: "Walk this tour",
+                      arguments: [entry.tourId],
+                  },
+        });
+    }
+
+    stepNode(step, current, total, tourId) {
         const state =
-            step.index === current ? "current" : step.index < current ? "visited" : "pending";
+            current < 0
+                ? "pending"
+                : step.index === current
+                  ? "current"
+                  : step.index < current
+                    ? "visited"
+                    : "pending";
         const style = {
             current: { icon: "play", color: "charts.blue" },
             visited: { icon: "pass-filled", color: "charts.green" },
             pending: { icon: "circle-outline", color: undefined },
         }[state];
 
+        // Drift outranks position: a step that no longer describes its code is
+        // the most important thing to know about it.
+        const icon = step.status === "changed" ? "warning" : style.icon;
+        const color = step.status === "changed" ? "charts.yellow" : style.color;
+
         const node = new Node(
             `${step.index + 1}. ${step.stepTitle}`,
             vscode.TreeItemCollapsibleState.None,
             {
-                iconPath: themed(style.icon, style.color),
+                id: `tour-${tourId}-step-${step.index}`,
+                iconPath: themed(icon, color),
                 description: `${basename(step.file)}:${step.startLine}`,
                 command: {
-                    command: "porthole.tour.goto",
+                    command: "porthole.tour.jump",
                     title: "Go to step",
-                    arguments: [step.index],
+                    arguments: [tourId, step.index],
                 },
                 contextValue: "tourStep",
             },
@@ -330,6 +381,13 @@ class TourProvider {
         tooltip.isTrusted = false; // model-written text
         tooltip.appendMarkdown(`**Step ${step.index + 1}/${total}** · ${step.stepTitle}\n\n`);
         if (step.narration) tooltip.appendMarkdown(step.narration);
+        if (step.status === "shifted") {
+            tooltip.appendMarkdown("\n\n_(this code moved since the tour was saved)_");
+        } else if (step.status === "changed") {
+            tooltip.appendMarkdown(
+                "\n\n_(the code here has changed since the tour was saved, so this step may no longer apply)_",
+            );
+        }
         node.tooltip = tooltip;
 
         return node;

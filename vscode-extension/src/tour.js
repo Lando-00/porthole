@@ -721,6 +721,18 @@ function updateStatusBar() {
 
 // --- lifecycle --------------------------------------------------------------
 
+/**
+ * A tour id, from either a bare string or a tree node.
+ *
+ * The tree passes its own item to a context-menu command, so both have to work
+ * or the menu entries silently do nothing.
+ */
+function idOf(arg) {
+    if (typeof arg === "string") return arg;
+    const id = arg && typeof arg.id === "string" ? arg.id : "";
+    return id.startsWith("tour-") ? id.slice("tour-".length) : "";
+}
+
 function activate(context) {
     extensionUri = context.extensionUri;
     buildDecorations();
@@ -743,6 +755,16 @@ function activate(context) {
         vscode.commands.registerCommand("porthole.tour.list", list),
         vscode.commands.registerCommand("porthole.tour.switch", switchTour),
         vscode.commands.registerCommand("porthole.tour.closeAll", closeAll),
+        // Takes a tree node as well as a bare id, because that is what the
+        // context menu passes.
+        vscode.commands.registerCommand("porthole.tour.activate", (arg) =>
+            activateTour(idOf(arg)),
+        ),
+        vscode.commands.registerCommand("porthole.tour.close", (arg) => close(idOf(arg))),
+        vscode.commands.registerCommand("porthole.tour.jump", async (tourId, index) => {
+            if (tourId && tourId !== activeTourId) await activateTour(tourId, index);
+            else await goto(index);
+        }),
         { dispose: clearDecorations },
     );
 
