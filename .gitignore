@@ -5,3 +5,6 @@ Thumbs.db
 
 # built VS Code extension package
 vscode-extension/*.vsix
+
+# scratch directories the probe scripts create while testing against a live window
+.probe-*/

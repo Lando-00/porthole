@@ -17,6 +17,26 @@ import { findCompanions } from "./companion.mjs";
 import { projectRoot } from "./git.mjs";
 
 // ---------------------------------------------------------------------------
+// /porthole <subcommand>
+// ---------------------------------------------------------------------------
+
+/**
+ * Which of the three things /porthole was asked for.
+ *
+ * A function rather than a switch inline in the command handler, because the
+ * handler cannot be reached without a live SDK session and this is the bit with
+ * actual branching in it. Unknown arguments fall through to the doctor rather
+ * than erroring: someone typing /porthole followed by something hopeful is
+ * asking for help, and the doctor is a reasonable thing to hand them.
+ */
+export function subcommand(args) {
+    const arg = String(args || "").trim().toLowerCase().replace(/^-+/, "");
+    if (arg === "help" || arg === "?" || arg === "h") return "help";
+    if (arg === "example" || arg === "demo" || arg === "show") return "example";
+    return "doctor";
+}
+
+// ---------------------------------------------------------------------------
 // /porthole help
 // ---------------------------------------------------------------------------
 

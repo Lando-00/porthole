@@ -40,7 +40,7 @@ import {
     tools as portholeTools,
 } from "./lib/annotate.mjs";
 import { doctor, pluginVersion } from "./lib/doctor.mjs";
-import { example, help } from "./lib/guide.mjs";
+import { example, help, subcommand } from "./lib/guide.mjs";
 import * as endpoint from "./lib/endpoint.mjs";
 import * as outbox from "./lib/outbox.mjs";
 import { problems, tools as problemTools } from "./lib/problems.mjs";
@@ -331,15 +331,15 @@ const session = await joinSession({
             description:
                 "porthole: /porthole help (what everything does), /porthole example (see it on your own code), /porthole (diagnose)",
             handler: withPresence(async (ctx) => {
-                const arg = (ctx.args || "").trim().toLowerCase();
-                if (arg === "help" || arg === "?" || arg === "--help") {
-                    return session.log(help());
+                switch (subcommand(ctx.args)) {
+                    case "help":
+                        return session.log(help());
+                    case "example":
+                        return session.log(await example(session));
+                    // Bare /porthole stays the doctor, so muscle memory survives.
+                    default:
+                        return doctor(session, ctx);
                 }
-                if (arg === "example" || arg === "demo") {
-                    return session.log(await example(session));
-                }
-                // Bare /porthole stays the doctor, so muscle memory survives.
-                return doctor(session, ctx);
             }),
         },
         {
