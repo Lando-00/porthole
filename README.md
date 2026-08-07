@@ -91,6 +91,11 @@ gutter, in the sidebar, and in what the agent is told. A walkthrough that has
 gone out of date says so rather than confidently describing code that has since
 changed.
 
+The useful consequence: a tour **heals from movement but not from rewriting**.
+Add a function above a step and the walkthrough catches up silently. Rewrite
+what the step was describing and it stays flagged until someone rebuilds it —
+because code moving does not invalidate an explanation, and code changing might.
+
 ### plan.md opens itself
 
 When the session folder has a `plan.md`, opening the session makes it the active

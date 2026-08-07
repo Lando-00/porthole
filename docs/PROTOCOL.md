@@ -658,6 +658,14 @@ trustworthy-looking one.
 Writing either back would destroy the severity the caller chose and accumulate a
 fresh copy of the note on every load.
 
+Together those give a useful property: **a tour heals from movement but not from
+rewriting.** A `shifted` step is re-pointed and saved at its new home with its
+original anchor, so the next load finds it there and reports `resolved` — the
+walkthrough has genuinely caught up. A `changed` step keeps an anchor that will
+never match again, so it stays flagged however many times the tour is re-saved,
+until someone rebuilds it. Code moving does not invalidate an explanation; code
+changing might.
+
 ### A missing file is not a deleted step
 
 A step whose file cannot be found is **kept**, marked `missing`, and excluded
