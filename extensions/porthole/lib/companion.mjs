@@ -207,6 +207,18 @@ export async function callCompanion(route, payload = null, options = {}) {
     const ack = await waitForAck(requestId, timeoutMs);
     if (!ack) {
         rmSync(join(REQ_DIR, `${requestId}.json`), { force: true });
+        // The presence file said a window was there and no window answered, so
+        // it was wrong. Forget it.
+        //
+        // A pid check cannot tell a live VS Code from whatever else inherited
+        // that pid after a reboot - and a hard power-off leaves the file behind
+        // to be inherited, because nothing gets to run on the way down. Without
+        // this, that stale file misleads every command from then on: each one
+        // burns the full timeout and then blames a window that is not there.
+        //
+        // Safe against a merely busy window, because the companion republishes
+        // its presence every time it handles a request, and on window focus.
+        forget(companion);
         return {
             ok: false,
             reason: "timeout",
@@ -215,6 +227,21 @@ export async function callCompanion(route, payload = null, options = {}) {
     }
 
     return ack.ok ? ack : { ...ack, reason: ack.reason || "refused" };
+}
+
+/**
+ * Drops a presence file that has been proved wrong.
+ *
+ * Deliberately quiet: this is housekeeping on the way to reporting a failure
+ * the caller already knows about.
+ */
+function forget(companion) {
+    if (!companion?.pid) return;
+    try {
+        rmSync(join(copilotHome(), "porthole", `companion-${companion.pid}.json`), { force: true });
+    } catch {
+        // Not ours to delete, or already gone.
+    }
 }
 
 /**
@@ -287,7 +314,10 @@ export function explain(result) {
     if (result.ok) return "";
     if (result.reason === "absent") return explainAbsent();
     if (result.reason === "timeout") {
-        return `${result.error}. The window may be busy, or the companion needs a reload.`;
+        return (
+            `${result.error}. Either the window is busy, or that record was left behind by a ` +
+            "window that no longer exists - it has been dropped, so try again."
+        );
     }
     return result.error || "the companion refused the request";
 }

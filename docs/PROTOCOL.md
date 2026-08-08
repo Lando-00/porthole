@@ -356,7 +356,37 @@ Written on load, refreshed on each command, deleted on unload.
 ### Liveness
 
 A reader treats an entry as live only if `process.kill(pid, 0)` succeeds, and
-deletes the file otherwise. A crashed process cannot leave a lie behind.
+deletes the file otherwise. **`EPERM` means alive** — the process exists but
+belongs to someone else, which is routine when one side runs elevated. Only
+`ESRCH` is death. Treating every throw as death makes every window on an
+elevated desktop invisible.
+
+Presence is **not a heartbeat**: there is no timer. Files are written on
+activation, on window focus, on workspace-folder changes, and after every
+request the companion handles. `updatedAt` exists only to order them; nothing
+judges freshness by it, because a window you have not touched in an hour is
+perfectly alive.
+
+### Presence is a hint; the ack is the proof
+
+A pid check cannot tell a live VS Code from **whatever inherited that pid after
+a reboot**, and a hard power-off leaves presence files behind — nothing gets to
+run on the way down. So a stale file can name a pid that now belongs to an
+unrelated process, and pass the liveness check.
+
+Therefore: **a presence file that fails to answer a request is deleted.** The
+request had already proved it wrong. Without this, one stale file misleads every
+later command — each burning the full timeout and then blaming a window that is
+not there.
+
+This is safe against a merely busy window because the companion republishes its
+presence after every request it handles, and on focus. A slow reply costs a
+window one entry, which the next interaction restores.
+
+Firing at a stale entry is not wasted either: `--open-url` **launches** the
+editor when it is not running, so the usual outcome is that the first command
+times out, drops the stale file, and the window it wanted comes up for the next
+one.
 
 ### Remote and cross-filesystem pairings
 

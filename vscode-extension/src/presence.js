@@ -1,4 +1,4 @@
-// Presence heartbeat.
+// Presence.
 //
 // The CLI needs to know, cheaply and accurately, whether a companion is running
 // and which URI scheme to address it with. Shelling out to
@@ -7,9 +7,16 @@
 //
 //   ~/.copilot/porthole/companion-<pid>.json
 //
-// Readers prune entries whose pid is dead, exactly like the CLI already does
-// for its own ~/.copilot/ide/*.lock files, so a crashed window cannot leave a
-// lie behind.
+// Deliberately NOT a heartbeat: there is no timer, because a periodic write
+// means an idle window doing disk I/O forever. It is written on activation, on
+// the events that change its contents, and after every request handled. Readers
+// judge liveness by probing the pid, never by the file's age - a window nobody
+// has touched for an hour is still perfectly alive.
+//
+// A pid check cannot tell a live window from a pid inherited after a reboot,
+// so the CLI deletes any presence file that fails to answer a request. That is
+// why the write after each handled request matters: it is how a window that IS
+// answering keeps saying so.
 
 const fs = require("node:fs");
 const os = require("node:os");
@@ -87,11 +94,11 @@ function remove() {
 }
 
 /**
- * Starts the heartbeat and keeps it current.
+ * Starts publishing presence and keeps it current.
  *
  * Refreshed on the events that can change its contents - window focus and
- * workspace folder changes - rather than on a timer, so an idle window costs
- * nothing.
+ * workspace folder changes - and after every request handled, rather than on a
+ * timer, so an idle window costs nothing.
  */
 function start(vscode, context, version) {
     write(vscode, version);

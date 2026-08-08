@@ -261,6 +261,48 @@ check("the getting-started walkthrough is intact", () => {
     return `${walkthrough.steps.length} steps, media and context keys present`;
 });
 
+check("a presence file that does not answer is dropped", () => {
+    // A pid check cannot tell a live window from a pid inherited after a
+    // reboot, and a power-off leaves presence files behind. Without this, one
+    // stale file misleads every later command - each burning the full timeout
+    // and then blaming a window that is not there.
+    const cli = readFileSync(join(ROOT, "extensions/porthole/lib/companion.mjs"), "utf8");
+    const onTimeout = cli.slice(cli.indexOf("const ack = await waitForAck"), cli.indexOf("function forget"));
+    if (!/forget\(companion\)/.test(onTimeout)) {
+        throw new Error("companion.mjs no longer drops a presence file that failed to answer");
+    }
+
+    // ...which is only safe because a window that IS answering keeps saying so.
+    const companion = readFileSync(join(ROOT, "vscode-extension/extension.js"), "utf8");
+    const afterAck = companion.slice(companion.indexOf("transport.writeAck(requestId, result)"));
+    if (!/presence\.write\(/.test(afterAck.slice(0, 800))) {
+        throw new Error(
+            "extension.js does not republish presence after handling a request, so a busy " +
+                "window would be dropped and not come back",
+        );
+    }
+    return "dropped on timeout, republished on reply";
+});
+
+check("EPERM is not mistaken for a dead process", () => {
+    // A live process owned by another user throws EPERM, not ESRCH - routine
+    // when VS Code runs elevated and the CLI does not. This has been the same
+    // bug three times in three different files.
+    const files = [
+        "extensions/porthole/lib/companion.mjs",
+        "extensions/porthole/lib/endpoint.mjs",
+        "extensions/porthole/lib/editor.mjs",
+    ];
+    for (const relPath of files) {
+        const source = readFileSync(join(ROOT, relPath), "utf8");
+        if (!source.includes("process.kill(")) continue;
+        if (!source.includes("EPERM")) {
+            throw new Error(`${relPath} probes a pid without allowing for EPERM`);
+        }
+    }
+    return `${files.length} liveness probes account for it`;
+});
+
 check("the publisher matches the hardcoded URI authority", () => {
     // The CLI fires vscode://<publisher>.<name>/<route>, lower-cased, and that
     // authority is a constant in companion.mjs. Publishing under a different
