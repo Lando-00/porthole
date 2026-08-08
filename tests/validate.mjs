@@ -261,47 +261,68 @@ check("the getting-started walkthrough is intact", () => {
     return `${walkthrough.steps.length} steps, media and context keys present`;
 });
 
-check("a presence file that does not answer is dropped", () => {
-    // A pid check cannot tell a live window from a pid inherited after a
-    // reboot, and a power-off leaves presence files behind. Without this, one
-    // stale file misleads every later command - each burning the full timeout
-    // and then blaming a window that is not there.
-    const cli = readFileSync(join(ROOT, "extensions/porthole/lib/companion.mjs"), "utf8");
-    const onTimeout = cli.slice(cli.indexOf("const ack = await waitForAck"), cli.indexOf("function forget"));
-    if (!/forget\(companion\)/.test(onTimeout)) {
-        throw new Error("companion.mjs no longer drops a presence file that failed to answer");
-    }
-
-    // ...which is only safe because a window that IS answering keeps saying so.
+check("presence is republished after a request is handled", () => {
+    // Not for self-healing - deleting a presence file that failed to answer was
+    // tried and reverted, because the request path returns early when there is
+    // no file, so a window that answered late could never be asked again.
+    //
+    // It earns its place by keeping `updatedAt` fresh on a window that is
+    // actually in use. Readers sort newest-first, so a record left over from a
+    // previous boot is outranked by the window doing the work, rather than
+    // being picked ahead of it.
     const companion = readFileSync(join(ROOT, "vscode-extension/extension.js"), "utf8");
     const afterAck = companion.slice(companion.indexOf("transport.writeAck(requestId, result)"));
     if (!/presence\.write\(/.test(afterAck.slice(0, 800))) {
+        throw new Error("extension.js no longer republishes presence after handling a request");
+    }
+
+    const cli = readFileSync(join(ROOT, "extensions/porthole/lib/companion.mjs"), "utf8");
+    if (/function forget\(/.test(cli)) {
         throw new Error(
-            "extension.js does not republish presence after handling a request, so a busy " +
-                "window would be dropped and not come back",
+            "companion.mjs deletes a presence file again - that strands any window whose reply " +
+                "is late, because callCompanion returns early when no file exists",
         );
     }
-    return "dropped on timeout, republished on reply";
+    return "republished on reply, never deleted";
 });
 
-check("EPERM is not mistaken for a dead process", () => {
+
+
+check("EPERM is never mistaken for a dead process", () => {
     // A live process owned by another user throws EPERM, not ESRCH - routine
-    // when VS Code runs elevated and the CLI does not. This has been the same
-    // bug three times in three different files.
-    const files = [
-        "extensions/porthole/lib/companion.mjs",
-        "extensions/porthole/lib/endpoint.mjs",
-        "extensions/porthole/lib/editor.mjs",
-    ];
-    for (const relPath of files) {
-        const source = readFileSync(join(ROOT, relPath), "utf8");
-        if (!source.includes("process.kill(")) continue;
-        if (!source.includes("EPERM")) {
-            throw new Error(`${relPath} probes a pid without allowing for EPERM`);
+    // when VS Code runs elevated and the CLI does not. This has now been the
+    // same bug in four different files, so the check looks at every file that
+    // probes a pid, on both sides, and insists the throw is actually inspected
+    // rather than merely mentioned somewhere in the file.
+    const roots = ["extensions/porthole/lib", "extensions/porthole", "vscode-extension/src"];
+    const checked = [];
+
+    for (const relRoot of roots) {
+        for (const name of readdirSync(join(ROOT, relRoot))) {
+            if (!/\.(mjs|js)$/.test(name)) continue;
+            const relPath = `${relRoot}/${name}`;
+            const source = readFileSync(join(ROOT, relPath), "utf8");
+            if (!source.includes("process.kill(")) continue;
+            checked.push(relPath);
+
+            // A bare `catch {` or a catch that never looks at the error around a
+            // liveness probe is the bug, whatever the file says elsewhere.
+            const probes = source.split("process.kill(").slice(1);
+            for (const after of probes) {
+                const window = after.slice(0, 260);
+                if (!/catch/.test(window)) continue;
+                if (!/EPERM/.test(window)) {
+                    throw new Error(`${relPath} probes a pid and swallows the error without checking for EPERM`);
+                }
+            }
         }
     }
-    return `${files.length} liveness probes account for it`;
+
+    if (checked.length === 0) throw new Error("found no liveness probes at all, which cannot be right");
+    return `${checked.length} files probe a pid, all account for it`;
 });
+
+
 
 check("the publisher matches the hardcoded URI authority", () => {
     // The CLI fires vscode://<publisher>.<name>/<route>, lower-cased, and that

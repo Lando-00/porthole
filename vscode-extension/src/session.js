@@ -67,6 +67,23 @@ function findSession() {
     return best ? { id: best.id, dir: best.dir, source: best.source } : null;
 }
 
+/**
+ * Whether a process is still there.
+ *
+ * `EPERM` means it exists and belongs to someone else - routine when the CLI
+ * runs elevated and the editor does not, or the reverse. Reading every throw as
+ * death made a live session's lock look stale, and the window then failed to
+ * find the session it was opened alongside.
+ */
+function isAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (err) {
+        return err.code === "EPERM";
+    }
+}
+
 /** Returns the newest live inuse lock time, ignoring locks of dead processes. */
 function liveLock(dir) {
     let newest = 0;
@@ -79,11 +96,7 @@ function liveLock(dir) {
     for (const name of entries) {
         const match = /^inuse\.(\d+)\.lock$/.exec(name);
         if (!match) continue;
-        try {
-            process.kill(Number(match[1]), 0);
-        } catch {
-            continue; // stale lock from a crashed or finished CLI
-        }
+        if (!isAlive(Number(match[1]))) continue; // stale lock from a finished CLI
         newest = Math.max(newest, mtime(path.join(dir, name)));
     }
     return newest;

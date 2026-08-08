@@ -40,7 +40,7 @@ import {
     tools as portholeTools,
 } from "./lib/annotate.mjs";
 import { doctor, pluginVersion } from "./lib/doctor.mjs";
-import { example, help, subcommand } from "./lib/guide.mjs";
+import { example, help, subcommand, unknownSubcommand } from "./lib/guide.mjs";
 import * as endpoint from "./lib/endpoint.mjs";
 import * as outbox from "./lib/outbox.mjs";
 import { problems, tools as problemTools } from "./lib/problems.mjs";
@@ -338,6 +338,8 @@ const session = await joinSession({
                         return session.log(await example(session));
                     case "tours":
                         return session.log(await tours({}));
+                    case "unknown":
+                        return session.log(unknownSubcommand(ctx.args));
                     // Bare /porthole stays the doctor, so muscle memory survives.
                     default:
                         return doctor(session, ctx);

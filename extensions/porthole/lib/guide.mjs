@@ -25,16 +25,40 @@ import { projectRoot } from "./git.mjs";
  *
  * A function rather than a switch inline in the command handler, because the
  * handler cannot be reached without a live SDK session and this is the bit with
- * actual branching in it. Unknown arguments fall through to the doctor rather
- * than erroring: someone typing /porthole followed by something hopeful is
- * asking for help, and the doctor is a reasonable thing to hand them.
+ * actual branching in it.
+ *
+ * Matches on the first word and rejects anything trailing it, rather than
+ * comparing the whole string. `/porthole tours delete my-tour` - which the
+ * README taught until recently - would otherwise fall through to the doctor:
+ * a full diagnostic report, no error, and the tour still there. Falling back to
+ * something plausible is how a mistyped destructive command looks like it
+ * worked.
  */
 export function subcommand(args) {
-    const arg = String(args || "").trim().toLowerCase().replace(/^-+/, "");
-    if (arg === "help" || arg === "?" || arg === "h") return "help";
-    if (arg === "example" || arg === "demo" || arg === "show") return "example";
-    if (arg === "tours" || arg === "tour" || arg === "list") return "tours";
-    return "doctor";
+    const words = String(args || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const first = (words[0] || "").replace(/^-+/, "");
+    const extra = words.length > 1;
+
+    if (first === "help" || first === "?" || first === "h") return "help";
+    if (first === "example" || first === "demo" || first === "show") return "example";
+    if (first === "tours" || first === "tour" || first === "list") {
+        return extra ? "unknown" : "tours";
+    }
+    if (!first || first === "doctor") return "doctor";
+    return "unknown";
+}
+
+/** What to say when /porthole was given something it does not understand. */
+export function unknownSubcommand(args) {
+    const given = String(args || "").trim();
+    return (
+        `porthole: '${given}' is not something /porthole does.\n\n` +
+        "  /porthole           diagnose everything\n" +
+        "  /porthole help      every command, with examples\n" +
+        "  /porthole example   see it on your own code\n" +
+        "  /porthole tours     the walkthroughs that exist\n\n" +
+        "Switching or deleting a tour is a click in the porthole sidebar."
+    );
 }
 
 // ---------------------------------------------------------------------------

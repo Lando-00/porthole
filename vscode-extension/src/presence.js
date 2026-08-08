@@ -13,10 +13,10 @@
 // judge liveness by probing the pid, never by the file's age - a window nobody
 // has touched for an hour is still perfectly alive.
 //
-// A pid check cannot tell a live window from a pid inherited after a reboot,
-// so the CLI deletes any presence file that fails to answer a request. That is
-// why the write after each handled request matters: it is how a window that IS
-// answering keeps saying so.
+// The write after each handled request keeps the record of a window that is in
+// use ahead of one left over from a previous boot, because readers sort
+// newest-first. A stale record is outranked rather than deleted - see
+// docs/PROTOCOL.md, "Presence is a hint; the ack is the proof".
 
 const fs = require("node:fs");
 const os = require("node:os");

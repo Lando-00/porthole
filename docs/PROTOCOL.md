@@ -369,24 +369,27 @@ perfectly alive.
 
 ### Presence is a hint; the ack is the proof
 
-A pid check cannot tell a live VS Code from **whatever inherited that pid after
-a reboot**, and a hard power-off leaves presence files behind — nothing gets to
-run on the way down. So a stale file can name a pid that now belongs to an
-unrelated process, and pass the liveness check.
+A pid check cannot tell a live editor from **whatever inherited that pid after a
+reboot**, and a hard power-off leaves presence files behind — nothing gets to run
+on the way down. So a stale file can name a pid that now belongs to an unrelated
+process, and pass the liveness check.
 
-Therefore: **a presence file that fails to answer a request is deleted.** The
-request had already proved it wrong. Without this, one stale file misleads every
-later command — each burning the full timeout and then blaming a window that is
-not there.
+**A file that fails to answer is nonetheless never deleted.** That was tried and
+reverted: a request returns early when there is no presence file, so a window
+whose reply arrived one poll interval late would never be sent another request,
+and could never republish. A live window, unreachable until it happened to be
+refocused.
 
-This is safe against a merely busy window because the companion republishes its
-presence after every request it handles, and on focus. A slow reply costs a
-window one entry, which the next interaction restores.
+Nothing needs deleting. Firing at a stale record **launches the editor** —
+`--open-url` starts it when it is not running — and the new window publishes a
+record of its own with a newer timestamp. Readers sort newest-first, so the
+stale entry is outranked rather than obeyed, and goes when its pid does. The
+usual shape after a reboot is one command that times out and starts the editor,
+then a second that works.
 
-Firing at a stale entry is not wasted either: `--open-url` **launches** the
-editor when it is not running, so the usual outcome is that the first command
-times out, drops the stale file, and the window it wanted comes up for the next
-one.
+This is why the companion republishes presence after **every request it
+handles**: it keeps the record of a window that is actually in use ahead of any
+left-over one.
 
 ### Remote and cross-filesystem pairings
 

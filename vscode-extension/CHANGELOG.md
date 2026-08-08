@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.1
+
+**Presence is republished after every request handled.** The CLI now deletes the
+presence file of any window that fails to answer — it cannot otherwise tell a
+live VS Code from an unrelated process that inherited its pid after a reboot,
+and a power-off leaves those files behind because nothing runs on the way down.
+Republishing on reply is what keeps a merely busy window from being forgotten:
+a slow answer costs one entry, and the next request restores it.
+
+Also stopped calling any of this a heartbeat. There is no timer and nothing
+judges freshness by age — the name invited someone to "fix" a stale entry by
+trusting `updatedAt`, which would break every window not focused recently.
+
 ## 0.5.0
 
 **A getting-started walkthrough.** Installing this extension used to do nothing

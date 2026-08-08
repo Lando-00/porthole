@@ -207,18 +207,6 @@ export async function callCompanion(route, payload = null, options = {}) {
     const ack = await waitForAck(requestId, timeoutMs);
     if (!ack) {
         rmSync(join(REQ_DIR, `${requestId}.json`), { force: true });
-        // The presence file said a window was there and no window answered, so
-        // it was wrong. Forget it.
-        //
-        // A pid check cannot tell a live VS Code from whatever else inherited
-        // that pid after a reboot - and a hard power-off leaves the file behind
-        // to be inherited, because nothing gets to run on the way down. Without
-        // this, that stale file misleads every command from then on: each one
-        // burns the full timeout and then blames a window that is not there.
-        //
-        // Safe against a merely busy window, because the companion republishes
-        // its presence every time it handles a request, and on window focus.
-        forget(companion);
         return {
             ok: false,
             reason: "timeout",
@@ -227,21 +215,6 @@ export async function callCompanion(route, payload = null, options = {}) {
     }
 
     return ack.ok ? ack : { ...ack, reason: ack.reason || "refused" };
-}
-
-/**
- * Drops a presence file that has been proved wrong.
- *
- * Deliberately quiet: this is housekeeping on the way to reporting a failure
- * the caller already knows about.
- */
-function forget(companion) {
-    if (!companion?.pid) return;
-    try {
-        rmSync(join(copilotHome(), "porthole", `companion-${companion.pid}.json`), { force: true });
-    } catch {
-        // Not ours to delete, or already gone.
-    }
 }
 
 /**
@@ -314,23 +287,42 @@ export function explain(result) {
     if (result.ok) return "";
     if (result.reason === "absent") return explainAbsent();
     if (result.reason === "timeout") {
+        // Deliberately does not delete the presence file it fired at. Deleting
+        // it looked like tidy self-healing and was a trap: the request path
+        // returns early when there is no presence file, so a window that
+        // answered one poll interval late would never be sent another request,
+        // and could never republish. A live window, unreachable forever.
+        //
+        // Nothing needs deleting anyway. Firing at a stale record launches the
+        // editor, which then publishes a fresh record of its own with a newer
+        // timestamp - and readers prefer the newest. The stale one is outranked
+        // rather than obeyed, and goes when its pid does.
         return (
-            `${result.error}. Either the window is busy, or that record was left behind by a ` +
-            "window that no longer exists - it has been dropped, so try again."
+            `${result.error}. Either the window is busy, or that record is left over from ` +
+            "a window that no longer exists - in which case the editor is starting now. Try again."
         );
     }
     return result.error || "the companion refused the request";
 }
 
 /**
- * Where VS Code keeps installed extensions.
+ * Where editors keep installed extensions.
  *
- * Both flavours, because someone may run the CLI against stable while Insiders
- * is what has the extension, or the reverse.
+ * All the flavours this plugin can drive, not just VS Code - editor.mjs
+ * launches Cursor and Windsurf too, and telling one of their users to run
+ * `code --install-extension` sends them to install into a different editor,
+ * which changes nothing.
  */
 function extensionDirs() {
     const home = homedir();
-    return [join(home, ".vscode", "extensions"), join(home, ".vscode-insiders", "extensions")];
+    const dirs = [
+        join(home, ".vscode", "extensions"),
+        join(home, ".vscode-insiders", "extensions"),
+        join(home, ".cursor", "extensions"),
+        join(home, ".windsurf", "extensions"),
+    ];
+    if (process.env.VSCODE_EXTENSIONS) dirs.unshift(process.env.VSCODE_EXTENSIONS);
+    return dirs;
 }
 
 /**
@@ -338,8 +330,8 @@ function extensionDirs() {
  * currently running.
  *
  * A positive answer is trustworthy; a negative one is only probably right,
- * since `--extensions-dir` can move the folder. The messages below are worded
- * to match that asymmetry.
+ * since `--extensions-dir` and portable installs put it somewhere this cannot
+ * see. The message below is hedged to match.
  */
 export function isCompanionInstalled() {
     for (const dir of extensionDirs()) {
@@ -357,38 +349,44 @@ export function isCompanionInstalled() {
 /**
  * Why nothing answered.
  *
- * "No heartbeat" has three quite different causes and they need three different
- * answers. Telling someone to install an extension they already have - which is
- * what this used to do - sends them to check the one thing that is fine, and
- * the instruction it gave was the *developer* one (`npm run install-local`) at
- * that.
+ * "No presence file" has three quite different causes and they need three
+ * different answers. Telling someone to install an extension they already have
+ * - which is what this used to do - sends them to check the one thing that is
+ * fine, and the instruction it gave was the *developer* one at that.
  */
 function explainAbsent() {
     if (!isCompanionInstalled()) {
         return (
-            "the porthole companion VS Code extension does not appear to be installed.\n" +
-            "  Install it:  code --install-extension Lando-00.porthole-companion\n" +
-            "  (or code-insiders), then open a new window."
+            "could not find the porthole companion extension in the usual place.\n" +
+            "  If it is not installed:  code --install-extension Lando-00.porthole-companion\n" +
+            "  (or code-insiders / cursor / windsurf), then open a new window."
         );
     }
 
-    // Installed. So either VS Code is not open, or it is open and the extension
-    // is not answering - which is nearly always a window that predates the
-    // install, or a workspace the user has not trusted yet.
+    // Installed. So either no window is running it, or one is and it is not
+    // answering - nearly always a window that predates the install, or a
+    // workspace the user has not trusted yet.
+    //
+    // `connectedIdes()` answers a near-but-not-identical question: which
+    // editors are attached to Copilot CLI, not which are running the companion.
+    // Worded as the hint it is, rather than as a claim about VS Code.
     const ides = connectedIdes();
     if (ides.length === 0) {
         return (
-            "the porthole companion is installed, but no VS Code window is running it.\n" +
-            "  Open VS Code - /cops will do it - and try again."
+            "the porthole companion is installed, but no window is reporting in.\n" +
+            "  If your editor is not open, /cops will open it.\n" +
+            "  If it is open, it was probably started before the extension was installed -\n" +
+            "  extension versions are resolved when a window loads, so open a NEW window."
         );
     }
 
     const names = [...new Set(ides.map((i) => i.ideName).filter(Boolean))].join(", ");
     return (
-        `the porthole companion is installed and ${names || "a window"} is open, but it is not answering.\n` +
+        `the porthole companion is installed and Copilot is connected to ${names || "an editor"}, ` +
+        "but the companion is not answering.\n" +
         "  Extension versions are resolved when a window loads, so a window opened before\n" +
         "  the install is still running the old one - open a NEW window.\n" +
-        "  If VS Code is asking whether you trust this workspace, it disables every\n" +
+        "  If your editor is asking whether you trust this workspace, it disables every\n" +
         "  extension until you say yes."
     );
 }

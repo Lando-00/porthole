@@ -166,10 +166,10 @@ async function handleUri(uri) {
     log.diag(`route=${route} ok=${result.ok}${result.error ? ` error=${result.error}` : ""}`);
     transport.writeAck(requestId, result);
 
-    // Republish presence on the way out. The CLI drops a presence file that
-    // fails to answer, since it cannot otherwise tell a live window from a pid
-    // inherited after a reboot - so a window that *is* answering has to keep
-    // saying so, or one slow reply would make it invisible until next focused.
+    // Republish presence on the way out. Not self-healing - a record that fails
+    // to answer is never deleted - but it keeps `updatedAt` fresh on a window
+    // that is actually in use, and readers sort newest-first. That is what puts
+    // a working window ahead of one left over from a previous boot.
     presence.write(vscode, VERSION);
 
     // Only surface a problem when nobody is waiting on an ack; otherwise the

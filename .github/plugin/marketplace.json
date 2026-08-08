@@ -12,7 +12,7 @@
     {
       "name": "porthole",
       "description": "Copilot annotates the code it is explaining and walks you through it step by step, in the VS Code window you already have open. Also diffs, mermaid diagrams, saved reviews and your Problems panel. Needs the 'porthole companion' VS Code extension.",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "source": "."
     }
   ]
