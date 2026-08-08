@@ -34,7 +34,7 @@ same behaviour every time, no model in the loop, no tokens spent.
 | `/annotate-clear` | Remove every annotation |
 | `/problems` | What VS Code is reporting right now: errors, warnings, type errors |
 | `/reviews` | List saved review findings; `load <name>` to bring one back |
-| `/tours` | The walkthrough library; `/tours <id>` to walk one, `close`, `delete <id>` |
+| `/porthole tours` | What walkthroughs exist, and which have gone stale |
 | `/tour-exit` | Stop walking the active tour (it stays in the library) |
 | `/porthole help` | Every command, grouped, with examples |
 | `/porthole example` | **Have Copilot demonstrate porthole on your own code** |

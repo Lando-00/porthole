@@ -17,10 +17,11 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 
-import { config, copilotHome } from "./config.mjs";import { pathsRelated, resolveEditorExe, resolveEditorTarget, whichEditor } from "./editor.mjs";
+import { config, copilotHome } from "./config.mjs";
+import { connectedIdes, pathsRelated, resolveEditorExe, resolveEditorTarget, whichEditor } from "./editor.mjs";
 
 const ROOT = join(tmpdir(), "porthole");
 const REQ_DIR = join(ROOT, "req");
@@ -284,14 +285,80 @@ function sleep(ms) {
 /** Human-readable reason a companion call failed, for logging. */
 export function explain(result) {
     if (result.ok) return "";
-    if (result.reason === "absent") {
-        return (
-            "the porthole companion VS Code extension is not running. " +
-            "Install it from vscode-extension/ (npm run install-local) and reload the window."
-        );
-    }
+    if (result.reason === "absent") return explainAbsent();
     if (result.reason === "timeout") {
         return `${result.error}. The window may be busy, or the companion needs a reload.`;
     }
     return result.error || "the companion refused the request";
+}
+
+/**
+ * Where VS Code keeps installed extensions.
+ *
+ * Both flavours, because someone may run the CLI against stable while Insiders
+ * is what has the extension, or the reverse.
+ */
+function extensionDirs() {
+    const home = homedir();
+    return [join(home, ".vscode", "extensions"), join(home, ".vscode-insiders", "extensions")];
+}
+
+/**
+ * Whether the companion is installed on disk, regardless of whether it is
+ * currently running.
+ *
+ * A positive answer is trustworthy; a negative one is only probably right,
+ * since `--extensions-dir` can move the folder. The messages below are worded
+ * to match that asymmetry.
+ */
+export function isCompanionInstalled() {
+    for (const dir of extensionDirs()) {
+        let entries = [];
+        try {
+            entries = readdirSync(dir);
+        } catch {
+            continue;
+        }
+        if (entries.some((e) => e.toLowerCase().startsWith(`${EXTENSION_ID}-`))) return true;
+    }
+    return false;
+}
+
+/**
+ * Why nothing answered.
+ *
+ * "No heartbeat" has three quite different causes and they need three different
+ * answers. Telling someone to install an extension they already have - which is
+ * what this used to do - sends them to check the one thing that is fine, and
+ * the instruction it gave was the *developer* one (`npm run install-local`) at
+ * that.
+ */
+function explainAbsent() {
+    if (!isCompanionInstalled()) {
+        return (
+            "the porthole companion VS Code extension does not appear to be installed.\n" +
+            "  Install it:  code --install-extension Lando-00.porthole-companion\n" +
+            "  (or code-insiders), then open a new window."
+        );
+    }
+
+    // Installed. So either VS Code is not open, or it is open and the extension
+    // is not answering - which is nearly always a window that predates the
+    // install, or a workspace the user has not trusted yet.
+    const ides = connectedIdes();
+    if (ides.length === 0) {
+        return (
+            "the porthole companion is installed, but no VS Code window is running it.\n" +
+            "  Open VS Code - /cops will do it - and try again."
+        );
+    }
+
+    const names = [...new Set(ides.map((i) => i.ideName).filter(Boolean))].join(", ");
+    return (
+        `the porthole companion is installed and ${names || "a window"} is open, but it is not answering.\n` +
+        "  Extension versions are resolved when a window loads, so a window opened before\n" +
+        "  the install is still running the old one - open a NEW window.\n" +
+        "  If VS Code is asking whether you trust this workspace, it disables every\n" +
+        "  extension until you say yes."
+    );
 }

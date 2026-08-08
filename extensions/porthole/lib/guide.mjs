@@ -33,6 +33,7 @@ export function subcommand(args) {
     const arg = String(args || "").trim().toLowerCase().replace(/^-+/, "");
     if (arg === "help" || arg === "?" || arg === "h") return "help";
     if (arg === "example" || arg === "demo" || arg === "show") return "example";
+    if (arg === "tours" || arg === "tour" || arg === "list") return "tours";
     return "doctor";
 }
 
@@ -46,6 +47,7 @@ const GROUPS = [
         rows: [
             ["/cops", "Open this project + the Copilot session folder in one workspace"],
             ["/porthole example", "Have Copilot demonstrate porthole on your own code"],
+            ["/porthole help", "This list"],
             ["/porthole", "Diagnose everything, when something is not working"],
         ],
     },
@@ -54,7 +56,7 @@ const GROUPS = [
         needsCompanion: true,
         rows: [
             ["ask for a walkthrough", '"walk me through how errors are handled" - a narrated, steppable tour'],
-            ["/tours", "The walkthrough library; /tours <id> to walk one"],
+            ["/porthole tours", "What walkthroughs exist, and which have gone stale"],
             ["/tour-exit", "Stop walking the active tour (it stays in the library)"],
             ["/annotate <file:10-25> [note]", "Mark those lines with a note on hover"],
             ["/annotate-clear", "Remove every annotation"],
@@ -113,6 +115,10 @@ export function help() {
     );
 
     lines.push("", "Try /porthole example to see it on your own code.");
+    lines.push(
+        "Switching between tours, and jumping to a step, is quicker in the porthole",
+        "sidebar than by typing an id.",
+    );
     return lines.join("\n");
 }
 

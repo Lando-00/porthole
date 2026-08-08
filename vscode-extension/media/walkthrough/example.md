@@ -19,7 +19,7 @@ code you already know.
 |---|---|
 | `/porthole help` | Every command, with examples |
 | `/porthole` | Diagnose everything, when something is not working |
-| `/tours` | The walkthrough library |
+| `/porthole tours` | What walkthroughs exist |
 | `/vsdiff` | Diffs: uncommitted, a commit, a range, or two files |
 | `/goto <file:10-25>` | Select and highlight a range |
 | `/goto <symbolName>` | Select a whole function or class by name |

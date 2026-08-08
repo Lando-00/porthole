@@ -73,6 +73,23 @@ export function whichEditor(name) {
 }
 
 /**
+ * Whether a process is still there.
+ *
+ * `EPERM` means it exists and belongs to someone else - routine when one side
+ * is elevated and the other is not, which is exactly the case on a machine
+ * where VS Code runs as administrator. Treating any throw as death made every
+ * connected window in that setup invisible.
+ */
+function isAlive(pid) {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (err) {
+        return err.code === "EPERM";
+    }
+}
+
+/**
  * Reads the IDE lock files the CLI writes for each connected editor window.
  * Only locks whose process is still alive count, matching the host's own rule.
  */
@@ -86,11 +103,7 @@ export function connectedIdes() {
         try {
             const info = JSON.parse(readFileSync(join(ideDir, entry), "utf8"));
             if (!info.pid) continue;
-            try {
-                process.kill(info.pid, 0); // liveness probe only
-            } catch {
-                continue;
-            }
+            if (!isAlive(info.pid)) continue;
             found.push({
                 lock: entry,
                 ideName: String(info.ideName || ""),

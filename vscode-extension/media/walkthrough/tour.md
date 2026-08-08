@@ -27,3 +27,7 @@ Tours are saved into the session folder, so closing the window does not lose
 them, and a later session can pick one up. Each step remembers the code it was
 written about, so a walkthrough that has gone out of date **says so** rather
 than pointing confidently at code that has since changed.
+
+Switching between them, and jumping to a step, is a click in the sidebar.
+`/porthole tours` lists what exists — including walkthroughs saved by earlier
+sessions, and how much of each still matches the code.

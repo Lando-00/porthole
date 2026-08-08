@@ -44,7 +44,7 @@ import { example, help, subcommand } from "./lib/guide.mjs";
 import * as endpoint from "./lib/endpoint.mjs";
 import * as outbox from "./lib/outbox.mjs";
 import { problems, tools as problemTools } from "./lib/problems.mjs";
-import { exitTour, manage, tour, tours, tools as tourTools } from "./lib/tour.mjs";
+import { exitTour, tour, tours, tools as tourTools } from "./lib/tour.mjs";
 import { review, tools as reviewTools } from "./lib/reviews.mjs";
 import { openSession, parseArgs, tools as openSessionTools } from "./lib/opensession.mjs";
 import { git, projectRoot, isGitRepo } from "./lib/git.mjs";
@@ -329,13 +329,15 @@ const session = await joinSession({
         {
             name: "porthole",
             description:
-                "porthole: /porthole help (what everything does), /porthole example (see it on your own code), /porthole (diagnose)",
+                "porthole: /porthole help, /porthole example (see it on your own code), /porthole tours (the library), /porthole (diagnose)",
             handler: withPresence(async (ctx) => {
                 switch (subcommand(ctx.args)) {
                     case "help":
                         return session.log(help());
                     case "example":
                         return session.log(await example(session));
+                    case "tours":
+                        return session.log(await tours({}));
                     // Bare /porthole stays the doctor, so muscle memory survives.
                     default:
                         return doctor(session, ctx);
@@ -354,26 +356,6 @@ const session = await joinSession({
             name: "tour-exit",
             description: "Stop walking the active tour. It stays in the library",
             handler: withPresence(async () => session.log(await exitTour())),
-        },
-        {
-            name: "tours",
-            description:
-                "The walkthrough library: /tours (list), /tours <id> (walk it), /tours close [id], /tours delete <id>",
-            handler: withPresence(async (ctx) => {
-                const [first, ...rest] = (ctx.args || "").trim().split(/\s+/).filter(Boolean);
-                if (!first) return session.log(await tours({}));
-
-                if (first === "close") {
-                    return session.log(await manage({ action: "close", tourId: rest[0] || "" }));
-                }
-                if (first === "delete") {
-                    if (!rest[0]) return session.log("porthole: /tours delete <id>");
-                    return session.log(await manage({ action: "delete", tourId: rest[0] }));
-                }
-                // Anything else is read as an id, because "walk that one" is
-                // overwhelmingly the common case.
-                return session.log(await manage({ action: "activate", tourId: first }));
-            }),
         },
         {
             name: "reviews",
