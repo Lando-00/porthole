@@ -19,8 +19,36 @@ into the conversation. This extension does those things from inside the window.
 > Then run `/porthole` in an interactive Copilot CLI session to check both halves
 > can see each other.
 
-**Requires Windows** for the CLI half at present; macOS and Linux launcher
-support is not there yet.
+**Verified on Windows.** The macOS and Linux code paths exist but are not yet
+tested, so treat them as unproven rather than unsupported — reports welcome.
+
+## What you would use it for
+
+**"Why does this bug happen?"** — instead of a wall of prose describing four
+files, Copilot builds a walkthrough. The narration sits above the code it
+explains, and you press `Alt+]` to follow the path at your own pace.
+
+**Reviewing a pull request with several threads.** Ask for a walkthrough per
+thread — the auth change, the error handling, the migration. Each is a separate
+answer to a separate question, and the sidebar switches between them.
+
+**Landing in an unfamiliar module.** *"Walk me through how a request reaches the
+database"* gives you a guided path through the real code rather than a summary
+of it.
+
+**Picking up where you left off.** Walkthroughs are saved and restored in later
+sessions. A tour written against older code says which steps have gone stale
+instead of confidently pointing at whatever now sits on those lines.
+
+**"What is actually broken?"** — Copilot reads your Problems panel, so it works
+from what your language server reports rather than guessing at compile errors.
+
+**Asking about the code in front of you.** Select it, press `Ctrl+Alt+.`, and it
+goes back into the CLI session with its location and any diagnostics attached.
+
+The quickest way to see all of this is `/walkthrough` in a Copilot CLI session —
+name something you want explained, and it is built in the window you are looking
+at. `/porthole example` demonstrates it on a file it picks for you.
 
 ## What it adds
 
@@ -37,7 +65,9 @@ source. Its own annotations are excluded from that answer.
 
 **Walkthrough mode.** An ordered, narrated tour of a code path, with the
 narration and controls in a CodeLens above each step, gutter markers showing
-progress, and the whole path in the sidebar. `Alt+]` / `Alt+[` to step.
+progress, and the whole path in the sidebar. `Alt+]` / `Alt+[` to step. Ask for
+one in conversation, or run `/walkthrough <what you want explained>` — that
+command also opens a window if none is running.
 
 **A library of walkthroughs.** Many tours loaded at once, one active. The active
 one owns the gutter and the lenses; every loaded one appears in the Problems

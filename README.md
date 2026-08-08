@@ -14,6 +14,21 @@ while it writes, or **walk you through them step by step** — so the explanatio
 and the code are the same conversation. Selections travel the other way too:
 send code from the editor straight into the session.
 
+## What you would use it for
+
+| You want to… | Try |
+|---|---|
+| Understand why a bug happens, across several files | `/walkthrough why the retry loop never exits` |
+| Review a PR with more than one thread in it | Ask for a walkthrough per thread — auth, error handling, migration |
+| Find your way around an unfamiliar module | `/walkthrough how a request reaches the database` |
+| Pick up a review from last week | `/porthole tours` — saved walkthroughs come back, and say which steps went stale |
+| Stop the agent guessing at compile errors | `/problems` — it reads what your language server actually reports |
+| Ask about the code in front of you | Select it, `Ctrl+Alt+.` |
+| See the whole thing on your own code | `/porthole example` |
+
+`/walkthrough` opens an editor window if none is running. Nothing else does —
+porthole never takes over your screen unless you asked it to.
+
 ## Commands
 
 Two kinds, deliberately:

@@ -1,7 +1,7 @@
 {
   "name": "porthole-companion",
   "displayName": "porthole companion",
-  "description": "The editor half of porthole: lets Copilot CLI reveal ranges, annotate code, run narrated walkthroughs, read your Problems panel, and take a selection back into the session.",
+  "description": "Copilot CLI walks you through your code in your own editor: narrated, step-by-step walkthroughs above the lines they explain, annotations, your Problems panel, and selections sent back.",
   "version": "0.5.1",
   "publisher": "Lando-00",
   "license": "MIT",
@@ -33,7 +33,10 @@
     "walkthrough",
     "code tour",
     "annotations",
-    "highlight"
+    "highlight",
+    "onboarding",
+    "code review",
+    "explain code"
   ],
   "activationEvents": [
     "onUri",
