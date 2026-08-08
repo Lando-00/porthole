@@ -44,6 +44,7 @@ same behaviour every time, no model in the loop, no tokens spent.
 
 | Command | What it does |
 |---|---|
+| `/walkthrough <what>` | **Copilot builds a narrated, steppable tour of the code you name** |
 | `/diagram` | You describe it, Copilot writes the mermaid, it opens **rendered** |
 | `/vsreview` | Open every file changed on a branch as diffs |
 | `/scratch` | Create/open a scratch note in the session folder |
@@ -68,7 +69,10 @@ without you typing anything.
 | `porthole_open_session` | `/cops`, on request — described so the agent only opens your editor when you ask |
 
 Ask *"walk me through how a porthole request reaches VS Code"* and the relevant
-ranges light up in the editor as the explanation arrives.
+ranges light up in the editor as the explanation arrives. Or run
+**`/walkthrough`** with what you want explained — the skill behind it also opens
+an editor window when none is running, which is the one case where porthole is
+allowed to do that on its own.
 
 ### A library of walkthroughs
 
@@ -403,7 +407,7 @@ porthole/
 │   ├── media/                      # gutter icons, sidebar icon, sqlite reader
 │   └── README.md
 ├── skills/                         # agent-driven commands
-│   ├── diagram/  vsreview/  scratch/
+│   ├── walkthrough/  diagram/  vsreview/  scratch/
 ├── scripts/                        # standalone PowerShell equivalents
 │   ├── common.ps1                  # IDE detection, editor routing, git helpers
 │   ├── open-session.ps1  open-session.sh

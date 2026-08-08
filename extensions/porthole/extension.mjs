@@ -380,8 +380,8 @@ const session = await joinSession({
         ...portholeTools(() => session),
         ...openSessionTools(() => session),
         ...problemTools(),
-        ...tourTools(),
-        ...reviewTools(),
+        ...tourTools(() => session),
+        ...reviewTools(() => session),
     ],
 });
 

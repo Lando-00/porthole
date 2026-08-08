@@ -79,7 +79,7 @@ const GROUPS = [
         title: "Being shown code",
         needsCompanion: true,
         rows: [
-            ["ask for a walkthrough", '"walk me through how errors are handled" - a narrated, steppable tour'],
+            ["/walkthrough <what>", '"how errors are handled" - a narrated, steppable tour of it'],
             ["/porthole tours", "What walkthroughs exist, and which have gone stale"],
             ["/tour-exit", "Stop walking the active tour (it stays in the library)"],
             ["/annotate <file:10-25> [note]", "Mark those lines with a note on hover"],
@@ -138,7 +138,11 @@ export function help() {
               "Then open a NEW window - a reload keeps the old build. /porthole checks it.",
     );
 
-    lines.push("", "Try /porthole example to see it on your own code.");
+    lines.push(
+        "",
+        "/walkthrough builds a tour of code you name, and opens an editor if none is up.",
+        "/porthole example is the quicker look: Copilot picks a file and shows you.",
+    );
     lines.push(
         "Switching between tours, and jumping to a step, is quicker in the porthole",
         "sidebar than by typing an id.",

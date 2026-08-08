@@ -135,6 +135,116 @@ check("every skill has frontmatter", () => {
     return `${names.length} skills`;
 });
 
+/** name, frontmatter and body for every skill, since five checks want them. */
+function skills() {
+    const skillsDir = join(ROOT, "skills");
+    if (!existsSync(skillsDir)) return [];
+    return readdirSync(skillsDir)
+        .filter((n) => statSync(join(skillsDir, n)).isDirectory())
+        .map((dir) => {
+            const text = readFileSync(join(skillsDir, dir, "SKILL.md"), "utf8");
+            const end = text.indexOf("\n---", 3);
+            return { dir, front: text.slice(3, end), body: text.slice(end + 4) };
+        });
+}
+
+// A skill whose `name` does not match its directory loads under the name and is
+// looked for under the directory, which reads as "the command silently does not
+// exist" - the same shape of bug as the publisher-case mismatch in onboarding.
+check("every skill's name matches its directory", () => {
+    const wrong = [];
+    for (const skill of skills()) {
+        const declared = /^name:\s*(\S+)/m.exec(skill.front)?.[1];
+        if (declared !== skill.dir) wrong.push(`${skill.dir} declares '${declared}'`);
+    }
+    if (wrong.length) throw new Error(wrong.join("; "));
+    return `${skills().length} skills`;
+});
+
+// Plugin skill names share one namespace with the commands the extension
+// registers, with no prefix to separate them. `/annotate` was proposed for this
+// skill and is already a porthole command - a collision that checking the CLI's
+// built-ins would not have caught, because the clash is with ourselves.
+check("no skill name collides with a porthole command", () => {
+    const ext = readFileSync(join(ROOT, "extensions/porthole/extension.mjs"), "utf8");
+    const block = ext.slice(ext.indexOf("commands: ["), ext.indexOf("tools: ["));
+    const commands = new Set([...block.matchAll(/^\s+name: "([\w-]+)"/gm)].map((m) => m[1]));
+    if (commands.size === 0) throw new Error("found no extension commands to check against");
+    const clashes = skills()
+        .map((s) => s.dir)
+        .filter((name) => commands.has(name));
+    if (clashes.length) {
+        throw new Error(`skill name(s) already used as porthole commands: ${clashes.join(", ")}`);
+    }
+    return `${commands.size} commands checked`;
+});
+
+// The walkthrough skill is the only thing that may authorise opening a window.
+// Losing `disable-model-invocation` would let the model load it - and with it
+// the instruction to pass openIfClosed - which is invisible from the outside.
+check("the walkthrough skill keeps both invocation flags", () => {
+    const skill = skills().find((s) => s.dir === "walkthrough");
+    if (!skill) throw new Error("skills/walkthrough is missing");
+    if (!/^user-invocable:\s*true\s*$/m.test(skill.front)) {
+        throw new Error("walkthrough must set user-invocable: true, or /walkthrough disappears");
+    }
+    if (!/^disable-model-invocation:\s*true\s*$/m.test(skill.front)) {
+        throw new Error(
+            "walkthrough must set disable-model-invocation: true, or the model can load it " +
+                "itself and open windows uninvited",
+        );
+    }
+    if (!skill.body.includes("porthole_tour")) {
+        throw new Error("walkthrough must name the tool it drives");
+    }
+    if (!skill.body.includes("openIfClosed")) {
+        throw new Error("walkthrough must tell the model to pass openIfClosed");
+    }
+    return "both flags set";
+});
+
+// The skill teaches craft; the schema owns the parameters. Restating them here
+// means two sources of truth, and the copy in prose is the one that rots.
+//
+// Only distinctive identifiers are listed. `activate` and `replace` are also
+// ordinary English words, and banning those bans the sentences with them.
+check("skills do not restate the tour schema", () => {
+    const owned = ["startLine", "endLine", "tourId", "stepTitle", "includeSteps", "severity"];
+    const offenders = [];
+    for (const skill of skills()) {
+        const found = owned.filter((p) => new RegExp(`\\b${p}\\b`).test(skill.body));
+        if (found.length) offenders.push(`${skill.dir}: ${found.join(", ")}`);
+    }
+    if (offenders.length) throw new Error(`schema parameters restated - ${offenders.join("; ")}`);
+    return `${owned.length} parameters`;
+});
+
+// Opening a window must stay opt-in. Without the `!== true` gate a tour the
+// model decided to build on its own could take over the user's screen, which is
+// exactly what porthole_open_session's own description forbids.
+check("opening a window is gated behind an explicit opt-in", () => {
+    const ensure = readFileSync(join(ROOT, "extensions/porthole/lib/ensure.mjs"), "utf8");
+    if (!/options\.openIfClosed\s*!==\s*true/.test(ensure)) {
+        throw new Error("ensure.mjs must refuse anything but a literal true openIfClosed");
+    }
+    const gateAt = ensure.indexOf("openIfClosed !== true");
+    const callAt = ensure.indexOf("openSession(");
+    if (callAt === -1) throw new Error("ensure.mjs no longer calls openSession");
+    if (gateAt === -1 || gateAt > callAt) {
+        throw new Error("the openIfClosed gate must come before openSession is called");
+    }
+    for (const [name, param] of [
+        ["tour.mjs", "openIfClosed"],
+        ["reviews.mjs", "openIfClosed"],
+    ]) {
+        const text = readFileSync(join(ROOT, "extensions/porthole/lib", name), "utf8");
+        if (!text.includes(`${param} === true`)) {
+            throw new Error(`${name} must pass openIfClosed only when it is literally true`);
+        }
+    }
+    return "gate in place";
+});
+
 check("the example config is accepted by the loader", () => {
     readJson("porthole.example.json");
     return "parses";

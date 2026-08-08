@@ -12,6 +12,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { callCompanion, explain } from "./companion.mjs";
+import { ensureCompanion } from "./ensure.mjs";
 import { copilotHome } from "./config.mjs";
 
 const SCHEMA = 1;
@@ -121,7 +122,7 @@ function describeFindings(review, resolution) {
     return lines.join("\n");
 }
 
-export async function review(args = {}) {
+export async function review(args = {}, getSession = null) {
     const action = args.action || "list";
     const root = process.cwd();
 
@@ -147,6 +148,10 @@ export async function review(args = {}) {
             return `porthole: '${args.slug}' is not a valid review name.`;
         }
 
+        const { note: openNote } = await ensureCompanion(getSession, {
+            openIfClosed: args.openIfClosed === true,
+        });
+
         // The companion checks each finding against the code as it is now and
         // puts them on screen, so try it first.
         const result = await callCompanion(
@@ -162,15 +167,15 @@ export async function review(args = {}) {
         // come with a warning attached.
         if (result.reason === "absent") {
             const match = listReviews({ limit: 200 }).find((r) => r.slug === args.slug);
-            if (match) return describeFindings(match, null);
+            if (match) return describeFindings(match, null) + openNote;
         }
-        return `porthole: ${explain(result)}`;
+        return `porthole: ${explain(result)}${openNote}`;
     }
 
     return `porthole: unknown action '${action}' - use list, save or load.`;
 }
 
-export function tools() {
+export function tools(getSession = null) {
     return [
         {
             name: "porthole_review",
@@ -205,9 +210,16 @@ export function tools() {
                         description: "Filter the list to one repository path.",
                     },
                     limit: { type: "integer", description: "Maximum reviews to list." },
+                    openIfClosed: {
+                        type: "boolean",
+                        description:
+                            "When loading, open an editor window if none is running. Default " +
+                            "false. Only set this when the user has explicitly asked to be " +
+                            "shown the review - it takes over their screen.",
+                    },
                 },
             },
-            handler: async (args) => review(args),
+            handler: async (args) => review(args, getSession),
         },
     ];
 }

@@ -400,7 +400,9 @@ export async function openSession(session, ctx, options = {}) {
     launchEditor(session, plan.editor.command, launchStep.args);
 
     const planNote = plan.revealPlan ? "\n  opened plan.md" : "";
-    const trustNote = await noteIfNothingCameUp(plan);
+    // Callers that wait for the companion themselves pass false, so the two
+    // waits do not stack.
+    const trustNote = options.notifyIfSilent === false ? "" : await noteIfNothingCameUp(plan);
 
     return plan.sessionFolder
         ? `porthole: opened '${plan.projectName}' + the Copilot session folder in one workspace.\n` +

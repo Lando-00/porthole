@@ -19,6 +19,7 @@ import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 
 import { callCompanion, explain } from "./companion.mjs";
+import { ensureCompanion } from "./ensure.mjs";
 
 const MAX_STEPS = 50;
 
@@ -38,7 +39,7 @@ function resolveStep(step, root) {
 
 // --- creating ---------------------------------------------------------------
 
-export async function tour(args = {}) {
+export async function tour(args = {}, getSession = null) {
     const root = process.cwd();
     const incoming = Array.isArray(args.steps) ? args.steps : [];
     if (incoming.length === 0) return "porthole: a tour needs at least one step.";
@@ -64,6 +65,10 @@ export async function tour(args = {}) {
         return `porthole: none of those files exist - ${unresolved.join(", ")}`;
     }
 
+    const { note: openNote } = await ensureCompanion(getSession, {
+        openIfClosed: args.openIfClosed === true,
+    });
+
     const result = await callCompanion(
         "tour",
         {
@@ -76,7 +81,7 @@ export async function tour(args = {}) {
         { contextPath: root },
     );
 
-    if (!result.ok) return `porthole: ${explain(result)}`;
+    if (!result.ok) return `porthole: ${explain(result)}${openNote}`;
 
     const skipped = [
         ...unresolved,
@@ -247,7 +252,7 @@ const STEP_SCHEMA = {
     required: ["file", "startLine", "stepTitle"],
 };
 
-export function tools() {
+export function tools(getSession = null) {
     return [
         {
             name: "porthole_tour",
@@ -255,18 +260,17 @@ export function tools() {
                 "Walk the user through code as an ordered, narrated tour in their VS Code " +
                 "window. Each step highlights a range and shows your narration in a CodeLens " +
                 "directly above it, with Next/Prev controls, so they follow the path at their " +
-                "own pace. Use this instead of a wall of prose whenever you are explaining how " +
-                "something works across several places: a request's path through a system, why " +
-                "a bug happens, what a refactor will touch, or how to find your way around an " +
-                "unfamiliar module.\n\n" +
-                "Many tours can be loaded at once, and one is active. For a pull request, a " +
-                "review, or any change with several independent threads, create ONE TOUR PER " +
-                "THREAD - the auth path, the error handling, the migration - rather than one " +
-                "long tour. Each is a separate answer to a separate question, and the user " +
-                "switches between them. Call porthole_tours first so you extend the library " +
-                "instead of duplicating what is already there.\n\n" +
-                "Order the steps the way you would narrate them. Requires the porthole " +
-                "companion VS Code extension.",
+                "own pace. Use this when explaining how something works across several places: " +
+                "a request's path through a system, why a bug happens, what a refactor will " +
+                "touch, or how to find your way around an unfamiliar module.\n\n" +
+                "Many tours can be loaded at once, and one is active. For a pull request or " +
+                "any change with several independent threads, create ONE TOUR PER THREAD - the " +
+                "auth path, the error handling, the migration - rather than one long tour. " +
+                "Call porthole_tours first so you extend the library instead of duplicating it.\n\n" +
+                "A step is a place worth stopping, not every mention of the subject. Order the " +
+                "steps the way you would narrate them aloud. Keep each narration short - it is " +
+                "read in a two-line lens, so say what is needed to understand this step and " +
+                "stop. Requires the porthole companion VS Code extension.",
             parameters: {
                 type: "object",
                 properties: {
@@ -300,10 +304,18 @@ export function tools() {
                             "Allow overwriting a tour that already has this id. Default true. " +
                             "Pass false to be told about a clash instead.",
                     },
+                    openIfClosed: {
+                        type: "boolean",
+                        description:
+                            "Open an editor window if none is running. Default false. Only set " +
+                            "this when the user has explicitly asked to be walked through " +
+                            "something, e.g. the /walkthrough command - it takes over their " +
+                            "screen, so never set it on a tour you decided to build yourself.",
+                    },
                 },
                 required: ["steps"],
             },
-            handler: async (args) => tour(args),
+            handler: async (args) => tour(args, getSession),
         },
 
         {
