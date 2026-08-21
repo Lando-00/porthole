@@ -40,8 +40,15 @@ const focus = require("./src/focus");
 const preview = require("./src/preview");
 const { createDispatcher } = require("./src/dispatcher");
 const capabilities = require("./src/capabilities");
+const { createSessionBinding } = require("./src/binding");
+const sessionState = require("./src/session");
 
 const VERSION = require("./package.json").version;
+const sessionBinding = createSessionBinding({
+    vscode,
+    findWorkspaceSession: sessionState.findWorkspaceSession,
+    sessionLabel: identity.sessionLabel,
+});
 
 /** Every route this build answers, so an unknown one is reported as such. */
 const KNOWN = new Set(capabilities.ROUTES);
@@ -210,6 +217,10 @@ function activate(context) {
 
     context.subscriptions.push(
         vscode.commands.registerCommand("porthole.clearHighlight", reveal.clearHighlight),
+        vscode.commands.registerCommand(
+            "porthole.clearSessionBinding",
+            sessionBinding.clear,
+        ),
     );
 
     // Makes the URI format discoverable without reading the source.

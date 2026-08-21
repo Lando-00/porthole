@@ -25,6 +25,11 @@ capabilities; unsupported operations fail before delivery with actionable
 update guidance. The identity status and CLI window list distinguish Unbound,
 Connected, Disconnected and Incompatible windows.
 
+Added an explicit **Clear session binding** action for finished tasks. A
+Disconnected Window remains owned by its Copilot session until the user
+confirms this action in that exact window. Clearing releases the window without
+deleting its Tours or Saved Reviews.
+
 ## 0.6.0
 
 **One Copilot session, one addressed window.** Each companion window now

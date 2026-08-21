@@ -104,6 +104,12 @@ The health states are Unbound, Connected, Disconnected and Incompatible. An
 incompatible status names whether the CLI plugin or companion needs updating
 and which capability is missing.
 
+**Session Binding lifecycle.** A window stays bound when its CLI endpoint exits,
+so resuming the exact Copilot session reconnects it. **porthole: Clear session
+binding** is an explicit, confirmed action in the Session view and Command
+Palette. It removes only the session folder from this window; Tours and Saved
+Reviews remain in the session store.
+
 **Editable change previews.** Copilot can open proposed replacements as normal
 VS Code diffs. Edit the PROPOSED side, then explicitly apply or cancel. Porthole
 refuses stale previews rather than overwriting files changed during review.

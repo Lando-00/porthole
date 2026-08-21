@@ -24,7 +24,7 @@ const path = require("node:path");
 const vscode = require("vscode");
 
 const { diag } = require("./log");
-const { findSession } = require("./session");
+const { findWorkspaceSession } = require("./session");
 
 /** Where the CLI publishes its presence files. Mirrors src/send.js. */
 function portholeHome() {
@@ -58,7 +58,7 @@ const state = { cliConnected: false, sessionFound: false };
 function refresh() {
     const next = {
         cliConnected: cliConnected(),
-        sessionFound: Boolean(findSession()),
+        sessionFound: Boolean(findWorkspaceSession()),
     };
 
     for (const [key, value] of Object.entries(next)) {

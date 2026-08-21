@@ -21,6 +21,11 @@ Health is explicit: **Unbound**, **Connected**, **Disconnected**, or
 **Incompatible**. An incompatible window names the missing capability and
 whether the CLI plugin or companion needs updating.
 
+A Disconnected Window keeps its Session Binding so resuming the exact Copilot
+session reconnects safely. When a task is finished, use **porthole: Clear
+session binding** in that window (or its Session-view button) to release it.
+Confirmation names the session; Tours and Saved Reviews remain on disk.
+
 ## What you would use it for
 
 | You want to… | Try |

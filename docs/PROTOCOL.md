@@ -422,6 +422,13 @@ legacy-companion route baseline remains available for older companion builds.
 - **Incompatible** — both halves are present but one lacks a required
   capability. Presence names `updateTarget` (`plugin` or `companion`) and the
   missing capabilities.
+
+Session Binding is the exact session folder present in the workspace, not the
+liveness of a CLI endpoint. Endpoint exit therefore changes Connected to
+Disconnected rather than Unbound. The companion's explicit **Clear session
+binding** action confirms the session name, removes only that workspace folder,
+and leaves every Session Artifact on disk. Its command visibility is driven by
+the exact workspace session, never the broader live-session display fallback.
 The sidebar may use a live `inuse.<pid>.lock` as a display fallback, but that
 guess is never published as routing identity. A parent `session-state` folder is
 not an exact session match.
