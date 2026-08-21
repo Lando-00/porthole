@@ -113,6 +113,12 @@ async function dispatch(route, payload) {
         case "tour-delete":
             return tourstore.remove(payload);
 
+        case "tour-discover":
+            return tourstore.discover(payload);
+
+        case "tour-import":
+            return tourstore.importTour(payload);
+
         case "review-save":
             return reviews.save(payload);
 

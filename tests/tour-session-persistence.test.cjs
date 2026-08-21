@@ -9,7 +9,7 @@ const ROOT = path.resolve(__dirname, "..");
 const SRC = path.join(ROOT, "vscode-extension", "src");
 const TOURSTORE = path.join(SRC, "tourstore.js");
 
-function loadTourstore({ session, workspaceSession, loadedTour = null }) {
+function loadTourstore({ session, workspaceSession, loadedTour = null, warningAnswer }) {
     const adopted = [];
     const tour = {
         setPersistHandler() {},
@@ -31,7 +31,7 @@ function loadTourstore({ session, workspaceSession, loadedTour = null }) {
             {
                 commands: { registerCommand: () => ({ dispose() {} }) },
                 window: {
-                    showWarningMessage: async () => undefined,
+                    showWarningMessage: async () => warningAnswer,
                     showInformationMessage() {},
                 },
             },
@@ -93,7 +93,7 @@ function loadTourstore({ session, workspaceSession, loadedTour = null }) {
     return { tourstore, adopted };
 }
 
-function writeTour(sessionDir, tourId, sessionId) {
+function writeTour(sessionDir, tourId, sessionId, overrides = {}) {
     const file = path.join(sessionDir, "porthole", "tours", `${tourId}.json`);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(
@@ -118,6 +118,7 @@ function writeTour(sessionDir, tourId, sessionId) {
                     severity: "info",
                 },
             ],
+            ...overrides,
         }),
     );
     return file;
@@ -328,6 +329,148 @@ test("a foreign-owned record inside the session folder is never library authorit
         assert.equal(tourstore.remove({ tourId: "misplaced-tour" }).ok, false);
         assert.equal(fs.existsSync(foreignFile), true);
         assert.deepEqual(adopted, []);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("Saved Tour Discovery reports historical Tours without loading them", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const current = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
+    const historical = { id: "session-old", dir: path.join(root, "session-old") };
+    try {
+        writeTour(current.dir, "current-tour", current.id);
+        writeTour(historical.dir, "auth-path", historical.id, {
+            title: "Authentication path",
+            repo: "C:\\repo",
+            branch: "feature/auth",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-02T00:00:00.000Z",
+        });
+
+        const { tourstore, adopted } = loadTourstore({
+            session: current,
+            workspaceSession: current,
+        });
+
+        const result = tourstore.discover({
+            repo: "C:\\repo",
+            sourceSessionId: historical.id,
+        });
+
+        assert.equal(result.ok, true);
+        assert.deepEqual(result.result.tours.map((tour) => ({
+            tourId: tour.tourId,
+            title: tour.title,
+            sourceSessionId: tour.sourceSessionId,
+            repo: tour.repo,
+            branch: tour.branch,
+            createdAt: tour.createdAt,
+            updatedAt: tour.updatedAt,
+            staleness: tour.staleness,
+        })), [{
+            tourId: "auth-path",
+            title: "Authentication path",
+            sourceSessionId: historical.id,
+            repo: "C:\\repo",
+            branch: "feature/auth",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-02T00:00:00.000Z",
+            staleness: { resolved: 1, shifted: 0, changed: 0, missing: 0 },
+        }]);
+        assert.deepEqual(adopted, []);
+        assert.deepEqual(
+            tourstore.list({}).result.tours.map((tour) => tour.tourId),
+            ["current-tour"],
+        );
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("import creates an independent session-owned Tour with provenance and a safe ID", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const current = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
+    const historical = { id: "session-old", dir: path.join(root, "session-old") };
+    try {
+        writeTour(current.dir, "auth-path", current.id, { title: "Current auth" });
+        const sourceFile = writeTour(historical.dir, "auth-path", historical.id, {
+            title: "Historical auth",
+        });
+
+        const sourceBefore = fs.readFileSync(sourceFile, "utf8");
+        const { tourstore, adopted } = loadTourstore({
+            session: current,
+            workspaceSession: current,
+        });
+
+        const result = await tourstore.importTour({
+            sourceSessionId: historical.id,
+            sourceTourId: "auth-path",
+            importedAt: "2026-08-21T12:00:00.000Z",
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(result.result.tourId, "auth-path-2");
+        const importedFile = path.join(
+            current.dir,
+            "porthole",
+            "tours",
+            "auth-path-2.json",
+        );
+        const imported = JSON.parse(fs.readFileSync(importedFile, "utf8"));
+        assert.equal(imported.sessionId, current.id);
+        assert.deepEqual(imported.provenance, {
+            sourceSessionId: historical.id,
+            sourceTourId: "auth-path",
+            importedAt: "2026-08-21T12:00:00.000Z",
+        });
+        assert.equal(fs.readFileSync(sourceFile, "utf8"), sourceBefore);
+        assert.equal(adopted.at(-1).tourId, "auth-path-2");
+        assert.equal(adopted.at(-1).sourceFile, undefined);
+        assert.equal(adopted.at(-1).sourceSessionId, current.id);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("replacing an imported Tour requires explicit confirmation and never changes the source", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const current = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
+    const historical = { id: "session-old", dir: path.join(root, "session-old") };
+    try {
+        const currentFile = writeTour(current.dir, "auth-path", current.id, { title: "Current auth" });
+        const sourceFile = writeTour(historical.dir, "auth-path", historical.id, { title: "Historical auth" });
+        const sourceBefore = fs.readFileSync(sourceFile, "utf8");
+        const currentBefore = fs.readFileSync(currentFile, "utf8");
+
+        const cancelledStore = loadTourstore({
+            session: current,
+            workspaceSession: current,
+            warningAnswer: undefined,
+        }).tourstore;
+        const cancelled = await cancelledStore.importTour({
+            sourceSessionId: historical.id,
+            sourceTourId: "auth-path",
+            replace: true,
+        });
+        assert.equal(cancelled.cancelled, true);
+        assert.equal(fs.readFileSync(currentFile, "utf8"), currentBefore);
+
+        const confirmedStore = loadTourstore({
+            session: current,
+            workspaceSession: current,
+            warningAnswer: "Replace",
+        }).tourstore;
+        const imported = await confirmedStore.importTour({
+            sourceSessionId: historical.id,
+            sourceTourId: "auth-path",
+            replace: true,
+            importedAt: "2026-08-21T12:00:00.000Z",
+        });
+        assert.equal(imported.ok, true);
+        assert.equal(JSON.parse(fs.readFileSync(currentFile, "utf8")).title, "Historical auth");
+        assert.equal(fs.readFileSync(sourceFile, "utf8"), sourceBefore);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

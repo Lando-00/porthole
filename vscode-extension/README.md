@@ -322,6 +322,11 @@ what is saved for the **exact bound Copilot session**. Tours in sibling session
 folders never enter the ordinary Tour Library. Acks
 `{ tours, activeTourId, loaded }`.
 
+`tour-discover` is the separate cross-session lookup. It returns read-only Saved
+Tour summaries and does not load them. `tour-import` creates an independent
+current-session copy with Tour Provenance. Collisions derive a safe ID unless
+the user explicitly confirms replacement.
+
 `tour-activate` takes `{ tourId, step }`, loading the tour from disk first if it
 is not in memory. Acks the tour plus a `staleness` tally when it came off disk.
 

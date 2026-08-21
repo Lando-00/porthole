@@ -36,6 +36,11 @@ a sibling session's same-repository or same-ID Tour cannot appear, load, change
 or be deleted. Resuming restores the cursor without activating a Tour, while a
 fork starts empty.
 
+Added explicit Saved Tour Discovery and import. Discovery is read-only and
+separate from the Tour Library. Import creates a current-session-owned copy with
+source provenance, safe collision naming, and confirmed replacement without
+mutating the historical source.
+
 ## 0.6.0
 
 **One Copilot session, one addressed window.** Each companion window now

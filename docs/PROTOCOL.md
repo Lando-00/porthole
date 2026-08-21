@@ -173,6 +173,8 @@ Set by the CLI so callers can react without parsing English:
 | `tour-list` | `{ includeSteps, repo, limit }` | **yes** | 0.4.0 |
 | `tour-activate` | `{ tourId, step }` | **yes** | 0.4.0 |
 | `tour-delete` | `{ tourId }` | **yes** | 0.4.0 |
+| `tour-discover` | `{ query, repo, sourceSessionId, limit }` | **yes** | 1.0.0 |
+| `tour-import` | `{ sourceSessionId, sourceTourId, targetTourId, replace }` | **yes** | 1.0.0 |
 | `review-save` | `{ slug, title }` | **yes** | 0.3.0 |
 | `review-list` | `{ limit, repo }` | **yes** | 0.3.0 |
 | `review-load` | `{ file }` or `{ slug }` | **yes** | 0.3.0 |
@@ -840,6 +842,29 @@ Deleting one session's Tour cannot touch a sibling session's same-ID file.
 The filesystem scanner remains capable of finding sibling-session records for
 the separate Saved Tour Discovery/import flow. That scan is never part of the
 ordinary Tour Library and its results are not writable current-session Tours.
+
+### Saved Tour Discovery and import
+
+`tour-discover` searches sibling session stores explicitly. It returns read-only
+summaries with source session, repository, branch, dates, step count and
+staleness; it never loads a Tour into memory.
+
+`tour-import` copies one discovered Tour into the bound session. The new record
+has current-session ownership and:
+
+```jsonc
+{
+  "provenance": {
+    "sourceSessionId": "session-old",
+    "sourceTourId": "auth-path",
+    "importedAt": "2026-08-21T12:00:00.000Z"
+  }
+}
+```
+
+The source file is never retained as writable state. ID collisions derive a
+safe suffix by default. Deliberate replacement requires a modal confirmation in
+the exact Porthole window and still leaves the historical source unchanged.
 
 ---
 

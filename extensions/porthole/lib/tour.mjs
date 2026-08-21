@@ -159,6 +159,60 @@ export async function tours(args = {}, sessionSource = null) {
     return lines.join("\n");
 }
 
+export async function discoverTours(args = {}, sessionSource = null) {
+    const result = await callCompanion(
+        "tour-discover",
+        {
+            query: args.query,
+            repo: args.repo,
+            sourceSessionId: args.sourceSessionId,
+            limit: args.limit,
+        },
+        companionOptions(process.cwd(), sessionSource),
+    );
+    if (!result.ok) return `porthole: ${explain(result)}`;
+
+    const list = result.result?.tours || [];
+    if (list.length === 0) return "porthole: Saved Tour Discovery found no matching Tours.";
+
+    const lines = [`porthole: Saved Tour Discovery found ${list.length} Tour(s).`];
+    for (const entry of list) {
+        const stale = describeStaleness(entry.staleness);
+        lines.push(
+            `  ${entry.sourceSessionId}/${entry.tourId} - "${entry.title}" ` +
+                `(${entry.steps} steps${entry.branch ? `, ${entry.branch}` : ""}` +
+                `${stale ? `, ${stale}` : ""})`,
+            `      ${entry.repo || "(no repository)"} · created ${entry.createdAt || "unknown"}`,
+        );
+    }
+    return lines.join("\n");
+}
+
+export async function importSavedTour(args = {}, sessionSource = null) {
+    const result = await callCompanion(
+        "tour-import",
+        {
+            sourceSessionId: args.sourceSessionId,
+            sourceTourId: args.sourceTourId,
+            targetTourId: args.targetTourId,
+            replace: args.replace === true,
+        },
+        companionOptions(process.cwd(), sessionSource),
+    );
+    if (!result.ok) return `porthole: ${explain(result)}`;
+    if (result.cancelled || result.imported === false) {
+        return (
+            "porthole: import cancelled; the source Tour and current Tour Library are unchanged." +
+            (result.suggestedTourId ? ` Suggested id: ${result.suggestedTourId}.` : "")
+        );
+    }
+    const imported = result.result || result;
+    return (
+        `porthole: imported '${args.sourceTourId}' as '${imported.tourId}' into this ` +
+        "Copilot session's Tour Library. The historical source remains unchanged."
+    );
+}
+
 function describeStaleness(s) {
     if (!s) return "";
     const parts = [];
@@ -359,6 +413,43 @@ export function tools(getSession = null) {
                 },
             },
             handler: async (args) => tours(args, getSession),
+        },
+        {
+            name: "porthole_tour_discover",
+            description:
+                "Search Saved Tours owned by other Copilot sessions without loading them into " +
+                "the current Tour Library. This is the only cross-session Tour lookup. Results " +
+                "are read-only and include source session, repository, branch, dates and " +
+                "staleness. Use porthole_tour_import for a deliberate session-owned copy.",
+            parameters: {
+                type: "object",
+                properties: {
+                    query: { type: "string", description: "Text matched against Tour id and title." },
+                    repo: { type: "string", description: "Only Tours saved for this repository path." },
+                    sourceSessionId: { type: "string", description: "Only Tours from this source Copilot session." },
+                    limit: { type: "integer", description: "Maximum results. Default 50." },
+                },
+            },
+            handler: async (args) => discoverTours(args, getSession),
+        },
+        {
+            name: "porthole_tour_import",
+            description:
+                "Import one Tour found by Saved Tour Discovery as an independent copy owned by " +
+                "the current Copilot session. The copy records Tour Provenance and can never " +
+                "mutate the historical source. ID collisions derive a safe id unless the user " +
+                "explicitly requests replacement; replacement is confirmed in VS Code.",
+            parameters: {
+                type: "object",
+                properties: {
+                    sourceSessionId: { type: "string", description: "Source session id from porthole_tour_discover." },
+                    sourceTourId: { type: "string", description: "Source Tour id from porthole_tour_discover." },
+                    targetTourId: { type: "string", description: "Optional preferred id for the Imported Tour." },
+                    replace: { type: "boolean", description: "Ask VS Code to confirm replacing a same-id current-session Tour. Default false." },
+                },
+                required: ["sourceSessionId", "sourceTourId"],
+            },
+            handler: async (args) => importSavedTour(args, getSession),
         },
 
         {

@@ -335,6 +335,132 @@ function describeStep(step) {
     };
 }
 
+function discover(payload = {}) {
+    const current = findWorkspaceSession();
+    const sourceSessionId = String(payload.sourceSessionId || "").trim() || null;
+    const limit = Math.min(200, Math.max(1, Number.parseInt(payload.limit, 10) || 50));
+    const tours = [];
+
+    for (const record of scan({ repo: payload.repo })) {
+        if (record.sessionId === current?.id) continue;
+        if (sourceSessionId && record.sessionId !== sourceSessionId) continue;
+        if (payload.query) {
+            const haystack = `${record.tourId} ${record.title || ""}`.toLowerCase();
+            if (!haystack.includes(String(payload.query).toLowerCase())) continue;
+        }
+
+        const { staleness } = resolveSteps(record);
+        tours.push({
+            tourId: record.tourId,
+            title: record.title,
+            sourceSessionId: record.sessionId,
+            repo: record.repo,
+            branch: record.branch,
+            createdAt: record.createdAt,
+            updatedAt: record.updatedAt,
+            steps: (record.steps || []).length,
+            staleness,
+        });
+        if (tours.length >= limit) break;
+    }
+    return { ok: true, result: { tours } };
+}
+
+function availableTourId(sessionId, preferred) {
+    const used = new Set(scan({ sessionId }).map((record) => record.tourId));
+    if (!used.has(preferred) && !tour.has(preferred)) return preferred;
+    for (let number = 2; number < 1000; number += 1) {
+        const suffix = `-${number}`;
+        const candidate = `${preferred.slice(0, 64 - suffix.length)}${suffix}`;
+        if (!used.has(candidate) && !tour.has(candidate)) return candidate;
+    }
+    return `${preferred.slice(0, 50)}-${Date.now()}`.slice(0, 64);
+}
+
+async function importTour(payload = {}) {
+    const session = findWorkspaceSession();
+    if (!session) return { ok: false, error: "no Copilot session is bound to this window" };
+
+    const sourceSessionId = String(payload.sourceSessionId || "").trim();
+    const sourceTourId = String(payload.sourceTourId || "").trim();
+    if (!sourceSessionId || !SLUG_PATTERN.test(sourceTourId)) {
+        return { ok: false, error: "sourceSessionId and sourceTourId are required" };
+    }
+    if (sourceSessionId === session.id) {
+        return { ok: false, error: "that Tour already belongs to this Copilot session" };
+    }
+
+    const source = scan({ sessionId: sourceSessionId }).find(
+        (record) => record.tourId === sourceTourId,
+    );
+    if (!source) return { ok: false, error: "the source Tour was not found" };
+
+    const preferred = String(payload.targetTourId || sourceTourId).trim();
+    if (!SLUG_PATTERN.test(preferred)) return { ok: false, error: "targetTourId is invalid" };
+
+    const existing = scan({ sessionId: session.id }).find(
+        (record) => record.tourId === preferred,
+    );
+    let tourId = preferred;
+    if (existing && payload.replace === true) {
+        const answer = await vscode.window.showWarningMessage(
+            `Replace the Tour "${preferred}" in this Copilot session?`,
+            { modal: true, detail: "The historical source Tour will not be changed." },
+            "Replace",
+        );
+        if (answer !== "Replace") {
+            return {
+                ok: true,
+                imported: false,
+                cancelled: true,
+                suggestedTourId: availableTourId(session.id, preferred),
+            };
+        }
+        tour.unload(preferred);
+    } else {
+        tourId = availableTourId(session.id, preferred);
+    }
+
+    const importedAt = payload.importedAt || new Date().toISOString();
+    const now = new Date().toISOString();
+    const record = {
+        ...source,
+        file: undefined,
+        tourId,
+        sessionId: session.id,
+        endpointId: null,
+        current: -1,
+        createdAt: now,
+        updatedAt: now,
+        provenance: { sourceSessionId, sourceTourId, importedAt },
+        steps: (source.steps || []).map((step) => ({ ...step })),
+    };
+    const file = fileFor(session.dir, tourId);
+    try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        const tmp = `${file}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify(record, null, 2), "utf8");
+        fs.renameSync(tmp, file);
+    } catch (err) {
+        return { ok: false, error: `could not import the Tour: ${err.message}` };
+    }
+
+    const { steps, staleness } = resolveSteps(record);
+    const adopted = tour.adopt({
+        ...record,
+        file: undefined,
+        steps,
+        staleness,
+        sourceSessionId: session.id,
+    });
+    if (!adopted) return { ok: false, error: "the Tour Library is full; close a Tour first" };
+
+    return {
+        ok: true,
+        result: { tourId, imported: true, file, provenance: record.provenance, staleness },
+    };
+}
+
 /**
  * Switches to a Tour owned by the bound session, loading it from that session's
  * folder first if it is not in memory.
@@ -566,6 +692,8 @@ module.exports = {
     activate: activateExtension,
     // routes
     list,
+    discover,
+    importTour,
     activateTour,
     remove,
     // internals, exported for the doctor and for probes

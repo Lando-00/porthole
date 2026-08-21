@@ -16,6 +16,8 @@ const ROUTES = [
     "tour-list",
     "tour-activate",
     "tour-delete",
+    "tour-discover",
+    "tour-import",
     "review-save",
     "review-list",
     "review-load",
