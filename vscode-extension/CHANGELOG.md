@@ -30,6 +30,12 @@ Disconnected Window remains owned by its Copilot session until the user
 confirms this action in that exact window. Clearing releases the window without
 deleting its Tours or Saved Reviews.
 
+Made the ordinary Tour Library strictly session-owned. Listing, restoration,
+activation, autosave and deletion now use only the exact bound Copilot session;
+a sibling session's same-repository or same-ID Tour cannot appear, load, change
+or be deleted. Resuming restores the cursor without activating a Tour, while a
+fork starts empty.
+
 ## 0.6.0
 
 **One Copilot session, one addressed window.** Each companion window now

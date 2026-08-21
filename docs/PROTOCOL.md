@@ -275,7 +275,7 @@ rather than evicting something the user may be part-way through.
 #### `tour-list` / `tour-activate` / `tour-delete`  *(new in 0.4.0)*
 
 ```jsonc
-// tour-list result — loaded tours and saved ones, merged; loaded wins
+// tour-list result — this session's loaded and saved Tours, merged; loaded wins
 {
   "activeTourId": "auth-path",
   "loaded": 2,
@@ -827,17 +827,19 @@ shortened tour back over the original.
 On activation the companion loads **this session's** saved tours, and activates
 none of them. Reopening a window should show you what you had, not decide what
 you are looking at. Each tour's `current` is restored too, so activating one
-later resumes the walk rather than starting it over. Tours from other sessions
-are found by `tour-list` and loaded on demand by `tour-activate` — that is what
-makes "pick up yesterday's review of that pull request" work.
+later resumes the walk rather than starting it over. A new session ID, including
+a fork, restores nothing from its parent.
 
 ### Ownership
 
-`endpointId` records which session created a tour. It is **provenance, not
-permission**: any session may activate or delete any tour, deliberately, so a
-later session can tidy up after a pull request is merged. Two sessions sharing
-one window now merge into one library instead of silently overwriting each
-other, which is what the pre-0.4.0 singleton did.
+`sessionId` is ownership. Ordinary `tour-list`, `tour-activate`, autosave and
+`tour-delete` are scoped to the exact session folder bound to the Porthole
+window. Repository identity and matching Tour IDs confer no permission.
+Deleting one session's Tour cannot touch a sibling session's same-ID file.
+
+The filesystem scanner remains capable of finding sibling-session records for
+the separate Saved Tour Discovery/import flow. That scan is never part of the
+ordinary Tour Library and its results are not writable current-session Tours.
 
 ---
 

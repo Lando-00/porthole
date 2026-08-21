@@ -125,7 +125,7 @@ export async function tours(args = {}, sessionSource = null) {
 
     const list = result.result?.tours || [];
     if (list.length === 0) {
-        return "porthole: no tours are loaded and none are saved for this machine.";
+        return "porthole: this Copilot session's Tour Library is empty.";
     }
 
     const lines = [`porthole: ${list.length} tour(s).`];
@@ -332,12 +332,11 @@ export function tools(getSession = null) {
         {
             name: "porthole_tours",
             description:
-                "List the walkthroughs available in the user's VS Code window: which are " +
-                "loaded, which one they are walking, and which are saved from earlier sessions " +
-                "but not yet loaded.\n\n" +
+                "List this Copilot session's Tour Library in its Porthole window: which Tours " +
+                "are loaded, which one is active, and which session-owned Tours are saved but " +
+                "not yet loaded. Tours from other sessions are never included.\n\n" +
                 "Call this before creating a tour, so you add to the library instead of " +
-                "duplicating it, and whenever the user refers to a walkthrough you did not " +
-                "create in this conversation.\n\n" +
+                "duplicating one already owned by this session.\n\n" +
                 "It also reports how many steps have gone stale - moved, changed, or pointing " +
                 "at a file that no longer exists - so you can tell whether a tour still " +
                 "describes the current code before pointing the user at it. A tour with " +
@@ -367,7 +366,7 @@ export function tools(getSession = null) {
             description:
                 "Switch, close or delete a walkthrough in the user's VS Code window, by id.\n\n" +
                 "  activate - make this the tour the user is walking, loading it from disk if " +
-                "needed. This is how you pick up a review saved by an earlier session.\n" +
+                "needed from this session's Tour Library.\n" +
                 "  goto     - activate it and jump straight to a particular step.\n" +
                 "  close    - stop walking it. It stays in the library, in the Problems panel " +
                 "and on disk.\n" +

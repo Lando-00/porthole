@@ -139,7 +139,7 @@ test("startup restore refuses a live session that is not in this workspace", () 
     }
 });
 
-test("a tour loaded from another session is not copied into the current session", () => {
+test("a foreign in-memory Tour cannot be saved by the current session", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
     const sessionA = { id: "session-a", dir: path.join(root, "session-a"), source: "workspace" };
     const sessionB = { id: "session-b", dir: path.join(root, "session-b"), source: "workspace" };
@@ -167,18 +167,20 @@ test("a tour loaded from another session is not copied into the current session"
     };
 
     try {
+        const before = fs.readFileSync(sourceFile, "utf8");
         const { tourstore } = loadTourstore({
             session: sessionB,
             workspaceSession: sessionB,
             loadedTour,
         });
         const result = tourstore.save("borrowed-tour");
-        assert.equal(result.ok, true);
+        assert.equal(result.ok, false);
+        assert.match(result.error, /owned by another Copilot session/);
         assert.equal(
             fs.existsSync(path.join(sessionB.dir, "porthole", "tours", "borrowed-tour.json")),
             false,
         );
-        assert.equal(JSON.parse(fs.readFileSync(sourceFile, "utf8")).sessionId, sessionA.id);
+        assert.equal(fs.readFileSync(sourceFile, "utf8"), before);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
@@ -200,6 +202,112 @@ test("restore skips a legacy copied tour older than its claimed session", () => 
         });
         assert.deepEqual(tourstore.restore(), { restored: 0 });
         assert.equal(adopted.length, 0);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("ordinary Tour Library listing excludes sibling-session Tours", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const sessionA = { id: "session-a", dir: path.join(root, "session-a"), source: "workspace" };
+    const sessionB = { id: "session-b", dir: path.join(root, "session-b"), source: "workspace" };
+    try {
+        writeTour(sessionA.dir, "current-tour", sessionA.id);
+        writeTour(sessionB.dir, "other-tour", sessionB.id);
+        const { tourstore } = loadTourstore({
+            session: sessionA,
+            workspaceSession: sessionA,
+        });
+
+        const result = tourstore.list({});
+
+        assert.equal(result.ok, true);
+        assert.deepEqual(
+            result.result.tours.map((tour) => tour.tourId),
+            ["current-tour"],
+        );
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("activation cannot load a Tour owned by a sibling session", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const sessionA = { id: "session-a", dir: path.join(root, "session-a"), source: "workspace" };
+    const sessionB = { id: "session-b", dir: path.join(root, "session-b"), source: "workspace" };
+    try {
+        writeTour(sessionB.dir, "other-tour", sessionB.id);
+        const { tourstore, adopted } = loadTourstore({
+            session: sessionA,
+            workspaceSession: sessionA,
+        });
+
+        const result = await tourstore.activateTour({ tourId: "other-tour" });
+
+        assert.equal(result.ok, false);
+        assert.match(result.error, /no tour called 'other-tour'/);
+        assert.deepEqual(adopted, []);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("deleting a Tour leaves a sibling session's same-ID Tour untouched", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const sessionA = { id: "session-a", dir: path.join(root, "session-a"), source: "workspace" };
+    const sessionB = { id: "session-b", dir: path.join(root, "session-b"), source: "workspace" };
+    try {
+        const fileA = writeTour(sessionA.dir, "shared-tour", sessionA.id);
+        const fileB = writeTour(sessionB.dir, "shared-tour", sessionB.id);
+        const { tourstore } = loadTourstore({
+            session: sessionA,
+            workspaceSession: sessionA,
+        });
+
+        const result = tourstore.remove({ tourId: "shared-tour" });
+
+        assert.equal(result.ok, true);
+        assert.deepEqual(result.result.deleted, [fileA]);
+        assert.equal(fs.existsSync(fileA), false);
+        assert.equal(fs.existsSync(fileB), true);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("resuming the same Copilot session restores its Tour cursor without activating it", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const session = { id: "session-a", dir: path.join(root, "session-a"), source: "workspace" };
+    try {
+        writeTour(session.dir, "resume-tour", session.id);
+        const { tourstore, adopted } = loadTourstore({
+            session,
+            workspaceSession: session,
+        });
+
+        assert.deepEqual(tourstore.restore(), { restored: 1 });
+        assert.equal(adopted.length, 1);
+        assert.equal(adopted[0].tourId, "resume-tour");
+        assert.equal(adopted[0].current, 0);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("a forked Copilot session does not inherit its parent's Tour Library", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const parent = { id: "session-parent", dir: path.join(root, "session-parent") };
+    const fork = { id: "session-fork", dir: path.join(root, "session-fork"), source: "workspace" };
+    try {
+        writeTour(parent.dir, "parent-tour", parent.id);
+        fs.mkdirSync(fork.dir, { recursive: true });
+        const { tourstore, adopted } = loadTourstore({
+            session: fork,
+            workspaceSession: fork,
+        });
+
+        assert.deepEqual(tourstore.restore(), { restored: 0 });
+        assert.deepEqual(adopted, []);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

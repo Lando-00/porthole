@@ -140,14 +140,13 @@ once, with one active**.
   delete it.
 - `Alt+]` / `Alt+[` step through the active tour.
 
-Tours are saved into the session folder automatically, so closing the window
-does not lose them, and a later session can pick one up — *"walk me through the
-review you saved yesterday"*.
+Tours are saved into their owning session folder automatically, so closing the
+window or restarting and resuming that same Copilot session does not lose them.
+A fork starts with an empty Tour Library.
 
 Only tours created by the session bound to a window are restored automatically.
-A tour deliberately loaded from another session remains owned by its original
-session: walking it updates that original saved copy but does not copy it into
-the current session or make it reappear on the next startup.
+Ordinary listing, activation and deletion never scan another session's Tour
+Library, even when both sessions use the same repository or Tour ID.
 
 Because line numbers rot, every step records a hash of the code it was written
 about. When a tour is reopened, each step is either found where it was, found

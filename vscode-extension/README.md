@@ -318,8 +318,9 @@ reported in `result.skipped`, never silently dropped. Acks
 ### `tour-list` / `tour-activate` / `tour-delete`
 
 `tour-list` takes `{ includeSteps, repo, limit }` and merges what is loaded with
-what is saved across **every** session folder, so a later session can find an
-earlier one's walkthroughs. Acks `{ tours, activeTourId, loaded }`.
+what is saved for the **exact bound Copilot session**. Tours in sibling session
+folders never enter the ordinary Tour Library. Acks
+`{ tours, activeTourId, loaded }`.
 
 `tour-activate` takes `{ tourId, step }`, loading the tour from disk first if it
 is not in memory. Acks the tour plus a `staleness` tally when it came off disk.

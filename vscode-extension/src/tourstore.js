@@ -88,6 +88,12 @@ function save(tourId) {
         diag(`tour not saved (no exact workspace session): ${tourId}`);
         return { ok: false, error: "no Copilot session folder is bound to this window" };
     }
+    if (entry.sourceSessionId && entry.sourceSessionId !== session.id) {
+        return {
+            ok: false,
+            error: `tour '${tourId}' is owned by another Copilot session`,
+        };
+    }
 
     const repo = entry.repo || projectFolder();
     const head = repo ? gitHead(repo) : { branch: null, commit: null };
@@ -241,16 +247,22 @@ function resolveSteps(record) {
 // --- routes -----------------------------------------------------------------
 
 /**
- * The library, as the CLI sees it: what is loaded, what is only on disk, and
- * how much of each still describes the current code.
+ * The bound session's library, as the CLI sees it: what is loaded, what is only
+ * on disk, and how much of each still describes the current code.
  */
 function list(payload = {}) {
     const limit = Math.min(200, Math.max(1, Number.parseInt(payload.limit, 10) || 50));
     const includeSteps = payload.includeSteps === true;
+    const session = findWorkspaceSession();
     const loaded = tour.getLibrary();
     const byId = new Map();
+    const ownedLoaded = session
+        ? loaded.tours.filter(
+              (entry) => !entry.sourceSessionId || entry.sourceSessionId === session.id,
+          )
+        : [];
 
-    for (const entry of loaded.tours) {
+    for (const entry of ownedLoaded) {
         byId.set(entry.tourId, {
             tourId: entry.tourId,
             title: entry.title,
@@ -273,7 +285,9 @@ function list(payload = {}) {
         });
     }
 
-    for (const record of scan({ repo: payload.repo })) {
+    for (const record of session
+        ? scan({ repo: payload.repo, sessionId: session.id })
+        : []) {
         if (byId.has(record.tourId)) {
             // Loaded wins, but the on-disk copy is where staleness can be
             // measured without disturbing what is on screen.
@@ -302,7 +316,11 @@ function list(payload = {}) {
     }
 
     const tours = [...byId.values()].slice(0, limit);
-    return { ok: true, result: { tours, activeTourId: loaded.activeTourId, loaded: loaded.tours.length } };
+    const activeTourId = byId.has(loaded.activeTourId) ? loaded.activeTourId : null;
+    return {
+        ok: true,
+        result: { tours, activeTourId, loaded: ownedLoaded.length },
+    };
 }
 
 function describeStep(step) {
@@ -317,17 +335,19 @@ function describeStep(step) {
 }
 
 /**
- * Switches to a tour, loading it from disk first if it is not in memory.
- *
- * The load path is what makes "pick up yesterday's review" work, and it is also
- * where the anchors earn their keep.
+ * Switches to a Tour owned by the bound session, loading it from that session's
+ * folder first if it is not in memory.
  */
 async function activateTour(payload = {}) {
     const tourId = String(payload.tourId || "").trim();
     if (!SLUG_PATTERN.test(tourId)) return { ok: false, error: "a tourId is required" };
+    const session = findWorkspaceSession();
+    if (!session) {
+        return { ok: false, error: "no Copilot session is bound to this window" };
+    }
 
     if (!tour.has(tourId)) {
-        const loaded = loadFromDisk(tourId);
+        const loaded = loadFromDisk(tourId, session.id);
         if (!loaded.ok) return loaded;
     }
 
@@ -341,8 +361,8 @@ async function activateTour(payload = {}) {
     };
 }
 
-function loadFromDisk(tourId) {
-    const record = scan().find((r) => r.tourId === tourId);
+function loadFromDisk(tourId, sessionId) {
+    const record = scan({ sessionId }).find((r) => r.tourId === tourId);
     if (!record) return { ok: false, error: `no tour called '${tourId}' was found` };
 
     const { steps, staleness } = resolveSteps(record);
@@ -381,6 +401,18 @@ function loadFromDisk(tourId) {
 function remove(payload = {}) {
     const tourId = String(payload.tourId || "").trim();
     if (!SLUG_PATTERN.test(tourId)) return { ok: false, error: "a tourId is required" };
+    const session = findWorkspaceSession();
+    if (!session) {
+        return { ok: false, error: "no Copilot session is bound to this window" };
+    }
+
+    const loadedEntry = tour.getTour(tourId);
+    if (loadedEntry?.sourceSessionId && loadedEntry.sourceSessionId !== session.id) {
+        return {
+            ok: false,
+            error: `tour '${tourId}' is owned by another Copilot session`,
+        };
+    }
 
     const unloaded = tour.unload(tourId);
 
@@ -393,7 +425,7 @@ function remove(payload = {}) {
     }
 
     const deleted = [];
-    for (const record of scan()) {
+    for (const record of scan({ sessionId: session.id })) {
         if (record.tourId !== tourId) continue;
         try {
             fs.rmSync(record.file, { force: true });
