@@ -17,6 +17,9 @@ send code from the editor straight into the session.
 Each session window identifies itself in the status bar with the session name,
 repository, branch, connection health, and a stable session colour. That makes
 it obvious which CLI conversation owns the window before you start editing.
+Health is explicit: **Unbound**, **Connected**, **Disconnected**, or
+**Incompatible**. An incompatible window names the missing capability and
+whether the CLI plugin or companion needs updating.
 
 ## What you would use it for
 
@@ -296,6 +299,9 @@ back to defaults and tells you once.
 > uses no shell-specific tooling, but macOS and Linux have not been verified.
 > A VS Code window running over WSL, SSH or in a container cannot see the CLI's
 > filesystem; porthole detects that and says so rather than timing out.
+> VS Code Stable and Insiders are supported. Compatible VS Code forks remain
+> best-effort until individually verified; they do not weaken exact-session,
+> capability, or Local Environment checks.
 - Node 22+ for the sidebar's task list (used only if the editor cannot read
   SQLite itself)
 

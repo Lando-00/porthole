@@ -112,6 +112,7 @@ test("an addressed route can persist and expose only its session's artifact", as
             windowId: "4444444444444444",
             session: sessionA,
         });
+
         harness.addWindow({
             windowId: "5555555555555555",
             session: sessionB,
@@ -152,6 +153,174 @@ test("an addressed route can persist and expose only its session's artifact", as
             harness.readSessionArtifact(sessionA, ["porthole", "tours", "probe.json"]),
             null,
         );
+    } finally {
+        harness.dispose();
+    }
+});
+
+test("a missing companion capability is refused before addressed delivery", async () => {
+    const harness = await createPortholeHarness();
+    try {
+        const session = harness.addSession(
+            "ffffffff-ffff-ffff-ffff-ffffffffffff",
+            "C:\\repo",
+        );
+        const window = harness.addWindow({
+            windowId: "6666666666666666",
+            session,
+            protocolLevel: 1,
+            capabilities: ["route:ping"],
+        });
+
+        const { tools } = await import("../extensions/porthole/lib/opensession.mjs");
+        const result = await harness.invokeTool(
+            tools(() => session),
+            "porthole_focus_window",
+            {},
+        );
+
+        assert.match(result, /requires companion capability 'route:focus'/);
+        assert.match(result, /update the porthole companion/i);
+        assert.deepEqual(window.requests, []);
+    } finally {
+        harness.dispose();
+    }
+});
+
+test("companion presence publishes its protocol and named route capabilities", async () => {
+    const harness = await createPortholeHarness();
+    try {
+        const session = harness.addSession(
+            "abababab-abab-abab-abab-abababababab",
+            "C:\\repo",
+        );
+        const window = harness.addWindow({
+            windowId: "7777777777777777",
+            session,
+        });
+
+        assert.equal(window.presence.protocolLevel, 1);
+        assert.equal(
+            window.presence.capabilities.includes("transport:addressed-inbox"),
+            true,
+        );
+        assert.equal(window.presence.capabilities.includes("route:focus"), true);
+        assert.deepEqual(window.presence.requiredCliCapabilities, []);
+    } finally {
+        harness.dispose();
+    }
+});
+
+test("a legacy companion receives only the guaranteed route baseline", async () => {
+    const harness = await createPortholeHarness();
+    try {
+        const session = harness.addSession(
+            "acacacac-acac-acac-acac-acacacacacac",
+            "C:\\repo",
+        );
+        const window = harness.addWindow({
+            windowId: "8888888888888888",
+            session,
+            protocolLevel: null,
+            capabilities: null,
+        });
+
+        const { callCompanion } = await import("../extensions/porthole/lib/companion.mjs");
+        const ping = await callCompanion("ping", null, { sessionPath: session.dir });
+
+        const { tools } = await import("../extensions/porthole/lib/opensession.mjs");
+        const focusResult = await harness.invokeTool(
+            tools(() => session),
+            "porthole_focus_window",
+            {},
+        );
+
+        assert.equal(ping.ok, true);
+        assert.match(focusResult, /predates capability negotiation/);
+        assert.match(focusResult, /update the porthole companion/i);
+        assert.deepEqual(window.requests.map((request) => request.route), ["ping"]);
+    } finally {
+        harness.dispose();
+    }
+});
+
+test("the window list reports all canonical connection health states", async () => {
+    const harness = await createPortholeHarness();
+    try {
+        const connected = harness.addSession(
+            "bcbcbcbc-bcbc-bcbc-bcbc-bcbcbcbcbcbc",
+            "C:\\repo",
+        );
+        const disconnected = harness.addSession(
+            "cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcdcd",
+            "C:\\repo",
+        );
+        const incompatible = harness.addSession(
+            "dededede-dede-dede-dede-dededededede",
+            "C:\\repo",
+        );
+        harness.addWindow({
+            windowId: "9090909090909090",
+            session: null,
+            connectionHealth: "unbound",
+        });
+        harness.addWindow({
+            windowId: "9191919191919191",
+            session: connected,
+            connectionHealth: "connected",
+        });
+        harness.addWindow({
+            windowId: "9292929292929292",
+            session: disconnected,
+            connectionHealth: "disconnected",
+        });
+        harness.addWindow({
+            windowId: "9393939393939393",
+            session: incompatible,
+            connectionHealth: "incompatible",
+            compatibility: {
+                updateTarget: "companion",
+                missingCapabilities: ["route:preview"],
+            },
+        });
+
+        const { windows } = await import("../extensions/porthole/lib/opensession.mjs");
+        const result = windows();
+
+        assert.match(result, /9090909090909090.*unbound/);
+        assert.match(result, /9191919191919191.*connected/);
+        assert.match(result, /9292929292929292.*disconnected/);
+        assert.match(result, /9393939393939393.*incompatible/);
+        assert.match(result, /update companion.*route:preview/);
+    } finally {
+        harness.dispose();
+    }
+});
+
+test("matching capabilities cannot cross a different Local Environment", async () => {
+    const harness = await createPortholeHarness();
+    try {
+        const session = harness.addSession(
+            "efefefef-efef-efef-efef-efefefefefef",
+            "C:\\repo",
+        );
+        const window = harness.addWindow({
+            windowId: "9494949494949494",
+            session,
+            presenceOverrides: {
+                copilotHome: "C:\\other-user\\.copilot",
+            },
+        });
+
+        const { tools } = await import("../extensions/porthole/lib/opensession.mjs");
+        const result = await harness.invokeTool(
+            tools(() => session),
+            "porthole_focus_window",
+            {},
+        );
+
+        assert.match(result, /uses a different Copilot home/);
+        assert.deepEqual(window.requests, []);
     } finally {
         harness.dispose();
     }

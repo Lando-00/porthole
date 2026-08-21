@@ -48,7 +48,7 @@ function heartbeatPath() {
     return path.join(heartbeatDir(), `companion-${process.pid}.json`);
 }
 
-function describe(vscode, version) {
+function describe(vscode, version, contract = {}) {
     let session = null;
     try {
         if (!findWorkspaceSession) {
@@ -70,6 +70,11 @@ function describe(vscode, version) {
         windowId: WINDOW_ID,
         pid: process.pid,
         version,
+        protocolLevel: contract.protocolLevel || null,
+        capabilities: Array.isArray(contract.capabilities) ? contract.capabilities : [],
+        requiredCliCapabilities: Array.isArray(contract.requiredCliCapabilities)
+            ? contract.requiredCliCapabilities
+            : [],
         uriScheme: vscode.env.uriScheme,
         appName: vscode.env.appName,
         appHost: vscode.env.appHost,
@@ -85,6 +90,13 @@ function describe(vscode, version) {
         repository: identity.repository || null,
         branch: identity.branch || null,
         connectionHealth: identity.state,
+        compatibility:
+            identity.state === "incompatible"
+                ? {
+                      updateTarget: identity.updateTarget,
+                      missingCapabilities: identity.missingCapabilities || [],
+                  }
+                : null,
         sessionColor: identity.color || null,
         // Whether the editor's own runtime can read session.db, or whether the
         // sidebar has to fall back to spawning `node`. Worth knowing from the
@@ -109,7 +121,7 @@ function hasHostSqlite() {
     return hostSqlite;
 }
 
-function write(vscode, version) {
+function write(vscode, version, contract = {}) {
     try {
         // Owner-only: this directory carries session metadata and, under
         // inbox/, requests addressed to this window, and under outbox/ the
@@ -119,7 +131,7 @@ function write(vscode, version) {
         const tmp = `${file}.tmp`;
         fs.writeFileSync(
             tmp,
-            JSON.stringify(describe(vscode, version), null, 2),
+            JSON.stringify(describe(vscode, version, contract), null, 2),
             { encoding: "utf8", mode: 0o600 },
         );
         fs.renameSync(tmp, file);
@@ -143,12 +155,12 @@ function remove() {
  * workspace folder changes - and after every request handled, rather than on a
  * timer, so an idle window costs nothing.
  */
-function start(vscode, context, version) {
-    write(vscode, version);
+function start(vscode, context, version, contract = {}) {
+    write(vscode, version, contract);
 
     context.subscriptions.push(
-        vscode.window.onDidChangeWindowState(() => write(vscode, version)),
-        vscode.workspace.onDidChangeWorkspaceFolders(() => write(vscode, version)),
+        vscode.window.onDidChangeWindowState(() => write(vscode, version, contract)),
+        vscode.workspace.onDidChangeWorkspaceFolders(() => write(vscode, version, contract)),
         { dispose: remove },
     );
 

@@ -19,6 +19,12 @@ walkthroughs from whichever CLI session happens to be live, and walking a tour
 loaded from an older session no longer copies it into the current session.
 Provable legacy copies are left discoverable but are not auto-restored.
 
+Added capability negotiation between independently released plugin and
+companion versions. Presence now publishes a protocol level and named
+capabilities; unsupported operations fail before delivery with actionable
+update guidance. The identity status and CLI window list distinguish Unbound,
+Connected, Disconnected and Incompatible windows.
+
 ## 0.6.0
 
 **One Copilot session, one addressed window.** Each companion window now

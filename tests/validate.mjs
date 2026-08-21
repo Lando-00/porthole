@@ -301,9 +301,12 @@ check("the example config is accepted by the loader", () => {
 
 /** The route names the companion's dispatcher accepts. */
 function companionRoutes() {
-    const source = readFileSync(join(ROOT, "vscode-extension/extension.js"), "utf8");
-    const match = source.match(/const KNOWN = new Set\(\[([^\]]*)\]\)/);
-    if (!match) throw new Error("could not find the KNOWN route set in extension.js");
+    const source = readFileSync(
+        join(ROOT, "vscode-extension/src/capabilities.js"),
+        "utf8",
+    );
+    const match = source.match(/const ROUTES = \[([^\]]*)\]/);
+    if (!match) throw new Error("could not find the ROUTES capability set");
     return new Set([...match[1].matchAll(/"([^"]*)"/g)].map((m) => m[1]));
 }
 

@@ -100,6 +100,9 @@ checkpoints, the agent's task list grouped by status, and the tour library.
 **Session identity.** A left-side status item shows the session name,
 repository, branch and connection health. Its stable per-session colour helps
 distinguish several Porthole windows at a glance; click it to open the sidebar.
+The health states are Unbound, Connected, Disconnected and Incompatible. An
+incompatible status names whether the CLI plugin or companion needs updating
+and which capability is missing.
 
 **Editable change previews.** Copilot can open proposed replacements as normal
 VS Code diffs. Edit the PROPOSED side, then explicitly apply or cancel. Porthole
@@ -156,7 +159,10 @@ window when several are open.
 
 Each window also writes `~/.copilot/porthole/companion-<pid>.json` while it is
 running, including `windowId`, `sessionId`, `sessionFolder`, workspace folders,
-and the URI scheme. The PID proves liveness; `windowId` is the address.
+the URI scheme, protocol level and named capabilities. The PID proves liveness;
+`windowId` is the address. Compatibility is checked per operation, so
+independently released plugin and companion versions may work together without
+having equal product versions.
 
 Two Windows details worth knowing, both learned the hard way:
 

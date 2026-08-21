@@ -1,0 +1,63 @@
+const assert = require("node:assert/strict");
+const test = require("node:test");
+
+const { connectionHealth } = require("../vscode-extension/src/capabilities");
+
+test("window health distinguishes binding, connection, and both incompatibility directions", () => {
+    assert.deepEqual(
+        connectionHealth({ sessionId: null, endpoint: null }),
+        { state: "unbound" },
+    );
+    assert.deepEqual(
+        connectionHealth({ sessionId: "session-a", endpoint: null }),
+        { state: "disconnected" },
+    );
+    assert.deepEqual(
+        connectionHealth({
+            sessionId: "session-a",
+            endpoint: { capabilities: ["transport:addressed-inbox"] },
+            companionCapabilities: ["route:ping"],
+        }),
+        { state: "connected", legacy: false },
+    );
+    assert.deepEqual(
+        connectionHealth({
+            sessionId: "session-a",
+            endpoint: {
+                capabilities: ["transport:addressed-inbox"],
+                requiredCompanionCapabilities: ["route:focus"],
+            },
+            companionCapabilities: ["route:ping"],
+        }),
+        {
+            state: "incompatible",
+            updateTarget: "companion",
+            missingCapabilities: ["route:focus"],
+        },
+    );
+    assert.deepEqual(
+        connectionHealth({
+            sessionId: "session-a",
+            endpoint: { capabilities: ["transport:legacy-uri"] },
+            companionCapabilities: ["route:ping"],
+            requiredCliCapabilities: ["transport:addressed-inbox"],
+        }),
+        {
+            state: "incompatible",
+            updateTarget: "plugin",
+            missingCapabilities: ["transport:addressed-inbox"],
+        },
+    );
+});
+
+test("a CLI endpoint without a capability handshake remains a connected legacy endpoint", () => {
+    assert.deepEqual(
+        connectionHealth({
+            sessionId: "session-a",
+            endpoint: { pid: 42 },
+            companionCapabilities: ["route:ping"],
+            requiredCliCapabilities: ["transport:addressed-inbox"],
+        }),
+        { state: "connected", legacy: true },
+    );
+});

@@ -30,6 +30,7 @@ import { tmpdir, homedir } from "node:os";
 import { basename, join } from "node:path";
 
 import { config, copilotHome } from "./config.mjs";
+import { companionSupportsRoute } from "./capabilities.mjs";
 import { connectedIdes, pathsRelated, resolveEditorExe, resolveEditorTarget, whichEditor } from "./editor.mjs";
 
 const ROOT = join(tmpdir(), "porthole");
@@ -318,6 +319,17 @@ export async function callCompanion(route, payload = null, options = {}) {
     // whole timeout and then report the wrong cause.
     const blocked = unreachable(companion);
     if (blocked) return { ok: false, reason: "refused", error: blocked };
+
+    const capability = companionSupportsRoute(companion, route);
+    if (!capability.ok) {
+        return {
+            ok: false,
+            reason: "incompatible",
+            error: capability.error,
+            missingCapability: capability.required,
+            companionVersion: companion.version || null,
+        };
+    }
 
     ensureDirs();
     sweep();

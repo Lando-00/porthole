@@ -344,6 +344,15 @@ answerable in about a millisecond instead of a full timeout.
   "windowId": "6f2d9e603f1759a1",
   "pid": 12345,
   "version": "0.7.0",
+  "protocolLevel": 1,
+  "capabilities": [
+    "transport:addressed-inbox",
+    "route:reveal",
+    "route:annotate",
+    "route:tour",
+    "route:focus"
+  ],
+  "requiredCliCapabilities": [],
   "uriScheme": "vscode-insiders",
   "appName": "Visual Studio Code - Insiders",
   "appHost": "desktop",          // "desktop" | "web" | remote host kind
@@ -356,7 +365,8 @@ answerable in about a millisecond instead of a full timeout.
   "sessionLabel": "Fix checkout race",
   "repository": "storefront",
   "branch": "fix/checkout-race",
-  "connectionHealth": "connected", // connected | waiting | unbound
+  "connectionHealth": "connected", // unbound | connected | disconnected | incompatible
+  "compatibility": null,            // or { updateTarget, missingCapabilities[] }
   "sessionColor": "charts.purple",
   "workspaceFolders": ["C:\\repo", "C:\\Users\\me\\.copilot\\session-state\\<id>"],
   "updatedAt": "2026-08-04T08:00:00.000Z"
@@ -373,6 +383,42 @@ session, an unambiguous project match only when no session target exists, then a
 sole old companion for mixed-version compatibility.
 
 Presence binds a session **only** from an exact session folder in the workspace.
+
+### Capability negotiation
+
+Product versions are display and update metadata, not compatibility rules.
+Every modern companion advertises a protocol level plus named capabilities.
+Route capabilities use `route:<route>`, with an empty/manual reveal route
+normalised to `route:reveal`. The addressed inbox is
+`transport:addressed-inbox`.
+
+The CLI extension checks the required route capability before writing a
+request. If it is missing, the call fails as `incompatible`, names the missing
+capability, and tells the user to update the companion and open a new window.
+Local Environment checks still run independently: matching capabilities never
+make a remote host, different temp directory, or different Copilot home
+reachable.
+
+A companion without a `capabilities` field is legacy. Legacy companions retain
+the guaranteed routes introduced through companion 0.5.x: reveal, clear, ping,
+annotations, symbols, diagnostics, Tours, and Saved Reviews. Newer operations
+such as workspace adoption, exact focus, and Change Preview require an updated
+companion instead of being sent as an unknown-route probe.
+
+CLI endpoint presence uses the same handshake shape: `protocolLevel`,
+`capabilities`, and `requiredCompanionCapabilities`. This lets the companion
+identify which half needs updating when a future release introduces a core
+requirement.
+
+### Window health
+
+- **Unbound** — the window has no Session Binding.
+- **Connected** — the bound Copilot session has a compatible live CLI endpoint.
+- **Disconnected** — the Session Binding remains, but no live matching endpoint
+  exists.
+- **Incompatible** — both halves are present but one lacks a required
+  capability. Presence names `updateTarget` (`plugin` or `companion`) and the
+  missing capabilities.
 The sidebar may use a live `inuse.<pid>.lock` as a display fallback, but that
 guess is never published as routing identity. A parent `session-state` folder is
 not an exact session match.

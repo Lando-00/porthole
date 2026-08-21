@@ -7,6 +7,7 @@ import focus from "../../vscode-extension/src/focus.js";
 import transport from "../../vscode-extension/src/transport.js";
 import workspace from "../../vscode-extension/src/workspace.js";
 import dispatcher from "../../vscode-extension/src/dispatcher.js";
+import companionCapabilities from "../../vscode-extension/src/capabilities.js";
 
 const SESSION_ID = /^[a-f0-9-]{36}$/;
 const WINDOW_ID = /^[a-f0-9]{16}$/;
@@ -97,7 +98,17 @@ export async function createPortholeHarness() {
         return session;
     }
 
-    function addWindow({ windowId, session = null, focused = false, routes = {} }) {
+    function addWindow({
+        windowId,
+        session = null,
+        focused = false,
+        routes = {},
+        protocolLevel = companionCapabilities.PROTOCOL_LEVEL,
+        capabilities = undefined,
+        connectionHealth = session ? "connected" : "unbound",
+        compatibility = null,
+        presenceOverrides = {},
+    }) {
         if (!WINDOW_ID.test(String(windowId))) throw new TypeError("invalid Porthole window id");
         if (windows.has(windowId)) throw new Error(`Porthole window '${windowId}' already exists`);
 
@@ -114,6 +125,13 @@ export async function createPortholeHarness() {
             ping: () => ({ ok: true, windowId }),
             ...extraRoutes,
         };
+        const advertisedCapabilities =
+            capabilities === undefined
+                ? [
+                      "transport:addressed-inbox",
+                      ...Object.keys(handlers).map(companionCapabilities.routeCapability),
+                  ]
+                : capabilities;
         const executeRequest = dispatcher.createDispatcher({
             knownRoutes: new Set(Object.keys(handlers)),
             optionalPayloadRoutes: new Set(["focus", "ping"]),
@@ -131,29 +149,37 @@ export async function createPortholeHarness() {
 
         const presenceDir = join(home, "porthole");
         mkdirSync(presenceDir, { recursive: true });
+        const presence = {
+            windowId,
+            pid: process.pid,
+            version: "test",
+            protocolLevel,
+            capabilities: advertisedCapabilities,
+            requiredCliCapabilities: [],
+            connectionHealth,
+            compatibility,
+            uriScheme: "vscode-insiders",
+            appName: "Visual Studio Code - Insiders",
+            appHost: "desktop",
+            remoteName: null,
+            tmpdir: tmpdir(),
+            copilotHome: home,
+            sessionId: session?.id || null,
+            sessionFolder: session?.dir || null,
+            workspaceFolders: host.folders.map((folder) => folder.uri.fsPath),
+            updatedAt: new Date().toISOString(),
+            ...presenceOverrides,
+        };
         writeFileSync(
             join(presenceDir, `companion-harness-${windowId}.json`),
-            JSON.stringify({
-                windowId,
-                pid: process.pid,
-                version: "test",
-                uriScheme: "vscode-insiders",
-                appName: "Visual Studio Code - Insiders",
-                appHost: "desktop",
-                remoteName: null,
-                tmpdir: tmpdir(),
-                copilotHome: home,
-                sessionId: session?.id || null,
-                sessionFolder: session?.dir || null,
-                workspaceFolders: host.folders.map((folder) => folder.uri.fsPath),
-                updatedAt: new Date().toISOString(),
-            }),
+            JSON.stringify(presence),
             "utf8",
         );
 
         const window = {
             windowId,
             session,
+            presence,
             requests,
             presentation: host.presentation,
             vscode: host.vscode,

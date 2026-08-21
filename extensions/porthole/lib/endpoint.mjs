@@ -19,6 +19,11 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import { copilotHome } from "./config.mjs";
+import {
+    CLI_CAPABILITIES,
+    CLI_PROTOCOL_LEVEL,
+    REQUIRED_COMPANION_CAPABILITIES,
+} from "./capabilities.mjs";
 
 const ENDPOINT_ID = randomBytes(8).toString("hex");
 const STARTED_AT = new Date().toISOString();
@@ -62,6 +67,9 @@ export function describe(session, ctx = null) {
         endpointId: ENDPOINT_ID,
         sessionId: resolveSessionId(session, ctx) || cached.sessionId,
         sessionName: cached.sessionName,
+        protocolLevel: CLI_PROTOCOL_LEVEL,
+        capabilities: [...CLI_CAPABILITIES],
+        requiredCompanionCapabilities: [...REQUIRED_COMPANION_CAPABILITIES],
         pid: process.pid,
         cwd: process.cwd(),
         projectRoot: cached.projectRoot,

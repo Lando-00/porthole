@@ -4,6 +4,7 @@ const path = require("node:path");
 const vscode = require("vscode");
 
 const { findWorkspaceSession, describeSession } = require("./session");
+const capabilities = require("./capabilities");
 
 const COLORS = [
     "charts.blue",
@@ -92,8 +93,15 @@ function identity() {
 
     const info = describeSession(session);
     const endpoint = matchingEndpoint(session.id);
+    const contract = capabilities.presenceContract();
+    const health = capabilities.connectionHealth({
+        sessionId: session.id,
+        endpoint,
+        companionCapabilities: contract.capabilities,
+        requiredCliCapabilities: contract.requiredCliCapabilities,
+    });
     return {
-        state: endpoint ? "connected" : "waiting",
+        ...health,
         label: endpoint?.sessionName || sessionLabel(session),
         sessionId: session.id,
         repository: info.project ? path.basename(info.project) : null,
@@ -107,21 +115,40 @@ function refresh() {
     if (!statusBar) return;
     const current = identity();
     if (current.state === "unbound") {
-        statusBar.hide();
+        statusBar.text = "$(debug-disconnect) porthole: unbound";
+        statusBar.color = new vscode.ThemeColor("statusBarItem.warningForeground");
+        statusBar.tooltip =
+            "Health: unbound\n\nNo Copilot session owns this window. Run /cops from a session to bind it.";
+        statusBar.show();
         return;
     }
 
-    const healthIcon = current.state === "connected" ? "radio-tower" : "debug-disconnect";
+    const healthIcon = {
+        connected: "radio-tower",
+        disconnected: "debug-disconnect",
+        incompatible: "error",
+    }[current.state];
     const repo = current.repository
         ? `${current.repository}${current.branch ? `@${current.branch}` : ""}`
         : null;
     statusBar.text = `$(${healthIcon}) ${current.label}${repo ? ` · ${repo}` : ""}`;
     statusBar.color = new vscode.ThemeColor(
-        current.state === "connected" ? current.color : "statusBarItem.warningForeground",
+        current.state === "connected"
+            ? current.color
+            : current.state === "incompatible"
+              ? "statusBarItem.errorForeground"
+              : "statusBarItem.warningForeground",
     );
+    const healthText =
+        current.state === "incompatible"
+            ? `incompatible — update the ${current.updateTarget}`
+            : current.state;
     statusBar.tooltip = [
         `Copilot session: ${current.label}`,
-        `Health: ${current.state === "connected" ? "connected" : "waiting for CLI"}`,
+        `Health: ${healthText}`,
+        current.missingCapabilities?.length
+            ? `Missing: ${current.missingCapabilities.join(", ")}`
+            : null,
         current.repository ? `Repository: ${current.repositoryPath}` : null,
         current.branch ? `Branch: ${current.branch}` : null,
         `Session: ${current.sessionId}`,

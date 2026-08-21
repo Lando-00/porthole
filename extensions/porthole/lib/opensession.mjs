@@ -81,6 +81,7 @@ function windowSummary(companion) {
         repository: companion.repository || null,
         branch: companion.branch || null,
         connectionHealth: companion.connectionHealth || null,
+        compatibility: companion.compatibility || null,
         workspaceFolders: companion.workspaceFolders || [],
     };
 }
@@ -665,7 +666,11 @@ export function windows() {
             `  ${window.windowId || "legacy"}  ${window.appName}  ` +
                 `${window.sessionLabel || `session ${window.sessionId || "unbound"}`}` +
                 `${window.repository ? `  ${window.repository}${window.branch ? `@${window.branch}` : ""}` : ""}` +
-                `${window.connectionHealth ? `  ${window.connectionHealth}` : ""}`,
+                `${window.connectionHealth ? `  ${window.connectionHealth}` : ""}` +
+                (window.compatibility
+                    ? `  update ${window.compatibility.updateTarget}: ` +
+                      `${(window.compatibility.missingCapabilities || []).join(", ")}`
+                    : ""),
             `      ${folders}`,
         );
     }

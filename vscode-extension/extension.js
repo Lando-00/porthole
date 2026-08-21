@@ -39,31 +39,13 @@ const identity = require("./src/identity");
 const focus = require("./src/focus");
 const preview = require("./src/preview");
 const { createDispatcher } = require("./src/dispatcher");
+const capabilities = require("./src/capabilities");
 
 const VERSION = require("./package.json").version;
 
 /** Every route this build answers, so an unknown one is reported as such. */
-const KNOWN = new Set([
-    "",
-    "reveal",
-    "clear",
-    "ping",
-    "annotate",
-    "annotate-clear",
-    "symbol",
-    "diagnostics",
-    "tour",
-    "tour-exit",
-    "tour-list",
-    "tour-activate",
-    "tour-delete",
-    "review-save",
-    "review-list",
-    "review-load",
-    "workspace-add",
-    "focus",
-    "preview",
-]);
+const KNOWN = new Set(capabilities.ROUTES);
+const PRESENCE_CONTRACT = capabilities.presenceContract(capabilities.ROUTES);
 
 /** Routes that are implemented elsewhere and land later in the plan. */
 const PLANNED = new Set();
@@ -92,7 +74,7 @@ async function dispatch(route, payload) {
             return { ok: true };
 
         case "ping":
-            return { ok: true, ...presence.describe(vscode, VERSION) };
+            return { ok: true, ...presence.describe(vscode, VERSION, PRESENCE_CONTRACT) };
 
         case "annotate":
             return annotations.annotate(payload);
@@ -165,7 +147,7 @@ const executeRequest = createDispatcher({
     onHandled: () => {
         // A working reply keeps this window's presence current. Readers sort
         // newest-first, so a live host outranks stale records.
-        presence.write(vscode, VERSION);
+        presence.write(vscode, VERSION, PRESENCE_CONTRACT);
         identity.refresh();
     },
 });
@@ -192,7 +174,7 @@ function activate(context) {
     transport.ensureDirs();
     transport.sweep();
 
-    const windowId = presence.start(vscode, context, VERSION);
+    const windowId = presence.start(vscode, context, VERSION, PRESENCE_CONTRACT);
     // Before annotations: publishing an annotation needs the collection to
     // exist already.
     diagnostics.activate(context);
