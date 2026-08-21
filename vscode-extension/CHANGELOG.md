@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.0.0
+
+**One Copilot session, one Porthole window, one owned artifact library.**
+Companion presence now negotiates capabilities and reports Unbound, Connected,
+Disconnected or Incompatible health. Session Binding survives CLI exit and can
+be explicitly cleared without deleting Tours or Saved Reviews.
+
+Tour listing, restore, activation, autosave and deletion are exact-session
+only. Saved Tour Discovery/import creates independent provenance copies;
+Archive/Unarchive is durable and distinct from Close/Delete; provable legacy
+copies can be imported or cleaned up safely while uncertain records are
+preserved.
+
+Saved Reviews now have current-session list/load/delete plus separate
+cross-session discovery/import with provenance, safe collision naming and
+confirmed replacement. This release also includes session identity UI,
+exact-window focus and editable guarded Change Preview.
+
 ## 0.7.0
 
 Added a session identity status item showing the session label, repository,

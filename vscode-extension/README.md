@@ -187,7 +187,7 @@ companion is reachable and to measure the round trip.
 
 ```jsonc
 { "ok": true, "windowId": "6f2d9e603f1759a1", "pid": 28556,
-  "version": "0.7.0", "uriScheme": "vscode-insiders",
+  "version": "1.0.0", "uriScheme": "vscode-insiders",
   "sessionId": "eeb847a2-...", "appName": "Visual Studio Code - Insiders",
   "workspaceFolders": ["c:\\Dev\\porthole", "c:\\Users\\me\\.copilot\\session-state\\eeb847a2-..."] }
 ```

@@ -356,7 +356,7 @@ answerable in about a millisecond instead of a full timeout.
 {
   "windowId": "6f2d9e603f1759a1",
   "pid": 12345,
-  "version": "0.7.0",
+  "version": "1.0.0",
   "protocolLevel": 1,
   "capabilities": [
     "transport:addressed-inbox",
