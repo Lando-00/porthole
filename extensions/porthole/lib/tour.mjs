@@ -182,7 +182,8 @@ export async function discoverTours(args = {}, sessionSource = null) {
             `  ${entry.sourceSessionId}/${entry.tourId} - "${entry.title}" ` +
                 `(${entry.steps} steps${entry.branch ? `, ${entry.branch}` : ""}` +
                 `${stale ? `, ${stale}` : ""})`,
-            `      ${entry.repo || "(no repository)"} · created ${entry.createdAt || "unknown"}`,
+            `      ${entry.repo || "(no repository)"} · created ${entry.createdAt || "unknown"}` +
+                ` · updated ${entry.updatedAt || "unknown"}`,
         );
     }
     return lines.join("\n");

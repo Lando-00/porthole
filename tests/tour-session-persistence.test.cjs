@@ -11,13 +11,15 @@ const TOURSTORE = path.join(SRC, "tourstore.js");
 
 function loadTourstore({ session, workspaceSession, loadedTour = null, warningAnswer }) {
     const adopted = [];
+    const loadedTours = new Map(loadedTour ? [[loadedTour.tourId, loadedTour]] : []);
     const tour = {
         setPersistHandler() {},
-        getTour: () => loadedTour,
-        getLibrary: () => ({ tours: [], activeTourId: null }),
-        has: () => false,
+        getTour: (tourId) => loadedTours.get(tourId) || null,
+        getLibrary: () => ({ tours: [...loadedTours.values()], activeTourId: null }),
+        has: (tourId) => loadedTours.has(tourId),
         adopt(entry) {
             adopted.push(entry);
+            loadedTours.set(entry.tourId, entry);
             return true;
         },
         async activateTour() {
@@ -429,6 +431,11 @@ test("import creates an independent session-owned Tour with provenance and a saf
         assert.equal(adopted.at(-1).tourId, "auth-path-2");
         assert.equal(adopted.at(-1).sourceFile, undefined);
         assert.equal(adopted.at(-1).sourceSessionId, current.id);
+        assert.equal(tourstore.save("auth-path-2").ok, true);
+        assert.deepEqual(
+            JSON.parse(fs.readFileSync(importedFile, "utf8")).provenance,
+            imported.provenance,
+        );
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

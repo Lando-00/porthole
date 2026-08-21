@@ -110,6 +110,7 @@ function save(tourId) {
         branch: entry.branch ?? head.branch,
         commit: entry.commit ?? head.commit,
         current: entry.current,
+        ...(entry.provenance ? { provenance: entry.provenance } : {}),
         steps: entry.steps.map((s) => ({
             file: storedPath(s.file, repo),
             startLine: s.startLine,
@@ -133,11 +134,7 @@ function save(tourId) {
         })),
     };
 
-    // A tour deliberately loaded from another session stays owned by that
-    // session. Walking it may update its cursor, but must not copy it into the
-    // current session where startup restore would make the temporary load
-    // permanent.
-    const file = entry.sourceFile || fileFor(session.dir, tourId);
+    const file = fileFor(session.dir, tourId);
     try {
         fs.mkdirSync(path.dirname(file), { recursive: true });
         // Write then rename, so a reader never sees a half-written tour.
@@ -243,6 +240,17 @@ function resolveSteps(record) {
     }
 
     return { steps, staleness: tally };
+}
+
+function liveTour(record, steps, staleness) {
+    return {
+        ...record,
+        file: undefined,
+        steps,
+        staleness,
+        sourceFile: undefined,
+        sourceSessionId: record.sessionId,
+    };
 }
 
 // --- routes -----------------------------------------------------------------
@@ -446,13 +454,7 @@ async function importTour(payload = {}) {
     }
 
     const { steps, staleness } = resolveSteps(record);
-    const adopted = tour.adopt({
-        ...record,
-        file: undefined,
-        steps,
-        staleness,
-        sourceSessionId: session.id,
-    });
+    const adopted = tour.adopt(liveTour(record, steps, staleness));
     if (!adopted) return { ok: false, error: "the Tour Library is full; close a Tour first" };
 
     return {
@@ -501,23 +503,7 @@ function loadFromDisk(tourId, sessionId) {
         };
     }
 
-    const adopted = tour.adopt({
-        tourId: record.tourId,
-        title: record.title,
-        steps,
-        // Where the walk left off, so activating a tour resumes it rather than
-        // starting over.
-        current: record.current,
-        endpointId: record.endpointId,
-        repo: record.repo,
-        branch: record.branch,
-        commit: record.commit,
-        createdAt: record.createdAt,
-        updatedAt: record.updatedAt,
-        staleness,
-        sourceFile: record.file,
-        sourceSessionId: record.sessionId,
-    });
+    const adopted = tour.adopt(liveTour(record, steps, staleness));
     if (!adopted) return { ok: false, error: "the tour library is full; close a tour first" };
 
     diag(`tour loaded from disk: ${tourId} ${JSON.stringify(staleness)}`);
@@ -600,27 +586,7 @@ function restore() {
         const { steps, staleness } = resolveSteps(record);
         if (steps.length === 0) continue;
         if (
-            tour.adopt({
-                tourId: record.tourId,
-                title: record.title,
-                steps,
-                // Restored, so activating later resumes the walk. Restoring is
-                // not activating - the window shows you what you had, it does
-                // not decide what you are looking at.
-                current: record.current,
-                endpointId: record.endpointId,
-                repo: record.repo,
-                branch: record.branch,
-                commit: record.commit,
-                createdAt: record.createdAt,
-                updatedAt: record.updatedAt,
-                sourceFile: record.file,
-                sourceSessionId: record.sessionId,
-                // Carried through, so a restored tour can still admit it is out
-                // of date. This is the case where staleness matters most, and
-                // it was the one case that reported nothing.
-                staleness,
-            })
+            tour.adopt(liveTour(record, steps, staleness))
         ) {
             restored += 1;
         }
