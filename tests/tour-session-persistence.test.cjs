@@ -11,6 +11,7 @@ const TOURSTORE = path.join(SRC, "tourstore.js");
 
 function loadTourstore({ session, workspaceSession, loadedTour = null, warningAnswer }) {
     const adopted = [];
+    const unloaded = [];
     const loadedTours = new Map(loadedTour ? [[loadedTour.tourId, loadedTour]] : []);
     const tour = {
         setPersistHandler() {},
@@ -25,7 +26,10 @@ function loadTourstore({ session, workspaceSession, loadedTour = null, warningAn
         async activateTour() {
             return { ok: true, result: {} };
         },
-        unload: () => false,
+        unload(tourId) {
+            unloaded.push(tourId);
+            return loadedTours.delete(tourId);
+        },
     };
     const mocks = new Map([
         [
@@ -92,7 +96,7 @@ function loadTourstore({ session, workspaceSession, loadedTour = null, warningAn
     } finally {
         Module._load = originalLoad;
     }
-    return { tourstore, adopted };
+    return { tourstore, adopted, unloaded };
 }
 
 function writeTour(sessionDir, tourId, sessionId, overrides = {}) {
@@ -478,6 +482,71 @@ test("replacing an imported Tour requires explicit confirmation and never change
         assert.equal(imported.ok, true);
         assert.equal(JSON.parse(fs.readFileSync(currentFile, "utf8")).title, "Historical auth");
         assert.equal(fs.readFileSync(sourceFile, "utf8"), sourceBefore);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("Archive Tour is durable, hidden by default, and reversible", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const session = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
+    try {
+        const file = writeTour(session.dir, "auth-path", session.id);
+        const { tourstore, unloaded, adopted } = loadTourstore({
+            session,
+            workspaceSession: session,
+        });
+
+        const archived = tourstore.setArchived({
+            tourId: "auth-path",
+            archived: true,
+            archivedAt: "2026-08-21T13:00:00.000Z",
+        });
+        assert.equal(archived.ok, true);
+        assert.deepEqual(unloaded, ["auth-path"]);
+        assert.deepEqual(tourstore.list({}).result.tours, []);
+        assert.deepEqual(
+            tourstore.list({ includeArchived: true }).result.tours.map((tour) => ({
+                tourId: tour.tourId,
+                archivedAt: tour.archivedAt,
+            })),
+            [{ tourId: "auth-path", archivedAt: "2026-08-21T13:00:00.000Z" }],
+        );
+        assert.equal(fs.existsSync(file), true);
+        assert.deepEqual(tourstore.restore(), { restored: 0 });
+
+        const unarchived = tourstore.setArchived({
+            tourId: "auth-path",
+            archived: false,
+        });
+        assert.equal(unarchived.ok, true);
+        assert.equal(adopted.at(-1).tourId, "auth-path");
+        assert.deepEqual(
+            tourstore.list({}).result.tours.map((tour) => tour.tourId),
+            ["auth-path"],
+        );
+        assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).archivedAt, undefined);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("archiving a Tour cannot change a sibling session's same-ID Tour", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const current = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
+    const sibling = { id: "session-sibling", dir: path.join(root, "session-sibling") };
+    try {
+        const currentFile = writeTour(current.dir, "shared-tour", current.id);
+        const siblingFile = writeTour(sibling.dir, "shared-tour", sibling.id);
+        const siblingBefore = fs.readFileSync(siblingFile, "utf8");
+        const { tourstore } = loadTourstore({
+            session: current,
+            workspaceSession: current,
+        });
+
+        assert.equal(tourstore.setArchived({ tourId: "shared-tour", archived: true }).ok, true);
+        assert.equal(Boolean(JSON.parse(fs.readFileSync(currentFile, "utf8")).archivedAt), true);
+        assert.equal(fs.readFileSync(siblingFile, "utf8"), siblingBefore);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

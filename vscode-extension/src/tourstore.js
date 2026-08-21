@@ -262,12 +262,15 @@ function liveTour(record, steps, staleness) {
 function list(payload = {}) {
     const limit = Math.min(200, Math.max(1, Number.parseInt(payload.limit, 10) || 50));
     const includeSteps = payload.includeSteps === true;
+    const includeArchived = payload.includeArchived === true;
     const session = findWorkspaceSession();
     const loaded = tour.getLibrary();
     const byId = new Map();
     const ownedLoaded = session
         ? loaded.tours.filter(
-              (entry) => !entry.sourceSessionId || entry.sourceSessionId === session.id,
+              (entry) =>
+                  (!entry.sourceSessionId || entry.sourceSessionId === session.id) &&
+                  (includeArchived || !entry.archivedAt),
           )
         : [];
 
@@ -283,6 +286,7 @@ function list(payload = {}) {
             branch: entry.branch,
             createdAt: entry.createdAt,
             updatedAt: entry.updatedAt,
+            archivedAt: entry.archivedAt,
             sessionId: entry.sourceSessionId,
             sourceFile: entry.sourceFile,
             // Present only for a tour that came off disk, and describing how it
@@ -297,6 +301,7 @@ function list(payload = {}) {
     for (const record of session
         ? scan({ repo: payload.repo, sessionId: session.id })
         : []) {
+        if (record.archivedAt && !includeArchived) continue;
         if (byId.has(record.tourId)) {
             // Loaded wins, but the on-disk copy is where staleness can be
             // measured without disturbing what is on screen.
@@ -317,6 +322,7 @@ function list(payload = {}) {
             branch: record.branch,
             createdAt: record.createdAt,
             updatedAt: record.updatedAt,
+            archivedAt: record.archivedAt,
             sessionId: record.sessionId,
             file: record.file,
             staleness,
@@ -366,12 +372,60 @@ function discover(payload = {}) {
             branch: record.branch,
             createdAt: record.createdAt,
             updatedAt: record.updatedAt,
+            archivedAt: record.archivedAt,
             steps: (record.steps || []).length,
             staleness,
         });
         if (tours.length >= limit) break;
     }
+
     return { ok: true, result: { tours } };
+}
+
+function setArchived(payload = {}) {
+    const session = findWorkspaceSession();
+    const tourId = String(payload.tourId || "").trim();
+    if (!session) return { ok: false, error: "no Copilot session is bound to this window" };
+    if (!SLUG_PATTERN.test(tourId)) return { ok: false, error: "a tourId is required" };
+
+    const timer = pending.get(tourId);
+    if (timer) {
+        clearTimeout(timer);
+        pending.delete(tourId);
+        const saved = save(tourId);
+        if (!saved.ok) return saved;
+    }
+
+    const record = scan({ sessionId: session.id }).find((entry) => entry.tourId === tourId);
+    if (!record) return { ok: false, error: `no tour called '${tourId}' was found` };
+
+    const archived = payload.archived !== false;
+    if (archived) record.archivedAt = payload.archivedAt || new Date().toISOString();
+    else delete record.archivedAt;
+    record.updatedAt = new Date().toISOString();
+
+    try {
+        const stored = { ...record };
+        delete stored.file;
+        const tmp = `${record.file}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify(stored, null, 2), "utf8");
+        fs.renameSync(tmp, record.file);
+    } catch (err) {
+        return {
+            ok: false,
+            error: `could not ${archived ? "archive" : "unarchive"} the Tour: ${err.message}`,
+        };
+    }
+
+    if (archived) {
+        tour.unload(tourId);
+    } else if (!tour.has(tourId)) {
+        loadFromDisk(tourId, session.id);
+    }
+    return {
+        ok: true,
+        result: { tourId, archived, archivedAt: record.archivedAt || null, file: record.file },
+    };
 }
 
 function availableTourId(sessionId, preferred) {
@@ -440,6 +494,7 @@ async function importTour(payload = {}) {
         current: -1,
         createdAt: now,
         updatedAt: now,
+        archivedAt: undefined,
         provenance: { sourceSessionId, sourceTourId, importedAt },
         steps: (source.steps || []).map((step) => ({ ...step })),
     };
@@ -572,6 +627,7 @@ function restore() {
     const sessionCreatedAt = createdAtForSession(session.dir);
     for (const record of scan({ sessionId: session.id })) {
         if (tour.has(record.tourId)) continue;
+        if (record.archivedAt) continue;
         // Older builds copied a borrowed tour into the current session on the
         // first cursor move. They preserved its original createdAt, so a tour
         // older than the session that allegedly created it is provably such a
@@ -633,6 +689,41 @@ function activateExtension(context) {
                 result.ok ? `porthole: deleted '${tourId}'.` : `porthole: ${result.error}`,
             );
         }),
+        vscode.commands.registerCommand("porthole.tour.archive", (arg) => {
+            const tourId = idOf(arg);
+            if (!tourId) return;
+            const result = setArchived({ tourId, archived: true });
+            vscode.window.showInformationMessage(
+                result.ok ? `porthole: archived '${tourId}'.` : `porthole: ${result.error}`,
+            );
+        }),
+        vscode.commands.registerCommand("porthole.tour.restoreArchived", async () => {
+            const archived = list({ includeArchived: true }).result.tours.filter(
+                (entry) => entry.archivedAt,
+            );
+            if (archived.length === 0) {
+                vscode.window.showInformationMessage(
+                    "porthole: this Copilot session has no archived Tours.",
+                );
+                return;
+            }
+            const picked = await vscode.window.showQuickPick(
+                archived.map((entry) => ({
+                    label: entry.title || entry.tourId,
+                    description: entry.tourId,
+                    detail: `Archived ${entry.archivedAt}`,
+                    tourId: entry.tourId,
+                })),
+                { placeHolder: "Choose a Tour to return to this session's Tour Library" },
+            );
+            if (!picked) return;
+            const result = setArchived({ tourId: picked.tourId, archived: false });
+            vscode.window.showInformationMessage(
+                result.ok
+                    ? `porthole: unarchived '${picked.tourId}'.`
+                    : `porthole: ${result.error}`,
+            );
+        }),
     );
 
     // Deferred: findSession reads the workspace folders, which are not settled
@@ -660,6 +751,7 @@ module.exports = {
     list,
     discover,
     importTour,
+    setArchived,
     activateTour,
     remove,
     // internals, exported for the doctor and for probes

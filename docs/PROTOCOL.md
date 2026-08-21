@@ -175,6 +175,7 @@ Set by the CLI so callers can react without parsing English:
 | `tour-delete` | `{ tourId }` | **yes** | 0.4.0 |
 | `tour-discover` | `{ query, repo, sourceSessionId, limit }` | **yes** | 1.0.0 |
 | `tour-import` | `{ sourceSessionId, sourceTourId, targetTourId, replace }` | **yes** | 1.0.0 |
+| `tour-archive` | `{ tourId, archived }` | **yes** | 1.0.0 |
 | `review-save` | `{ slug, title }` | **yes** | 0.3.0 |
 | `review-list` | `{ limit, repo }` | **yes** | 0.3.0 |
 | `review-load` | `{ file }` or `{ slug }` | **yes** | 0.3.0 |
@@ -865,6 +866,21 @@ has current-session ownership and:
 The source file is never retained as writable state. ID collisions derive a
 safe suffix by default. Deliberate replacement requires a modal confirmation in
 the exact Porthole window and still leaves the historical source unchanged.
+An imported copy starts unarchived regardless of the source's archive state.
+
+### Archive lifecycle
+
+`tour-archive` sets or removes a durable `archivedAt` timestamp on one
+session-owned Tour. Archiving unloads an Active Tour from CodeLens, gutter,
+Problems and the default Tour Library without deleting its file. `tour-list`
+excludes archived Tours unless `includeArchived: true`; unarchive removes the
+timestamp and loads the Tour back into the companion library when its steps can
+be resolved.
+
+Close, Archive and Delete are separate operations: Close only stops the current
+Walkthrough, Archive durably declutters, and Delete permanently removes the
+exact owned file after confirmation. Same-ID Tours in sibling sessions are
+never candidates.
 
 ---
 

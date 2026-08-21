@@ -118,7 +118,12 @@ export async function tour(args = {}, getSession = null) {
 export async function tours(args = {}, sessionSource = null) {
     const result = await callCompanion(
         "tour-list",
-        { includeSteps: args.includeSteps === true, repo: args.repo, limit: args.limit },
+        {
+            includeSteps: args.includeSteps === true,
+            includeArchived: args.includeArchived === true,
+            repo: args.repo,
+            limit: args.limit,
+        },
         companionOptions(process.cwd(), sessionSource),
     );
     if (!result.ok) return `porthole: ${explain(result)}`;
@@ -131,6 +136,7 @@ export async function tours(args = {}, sessionSource = null) {
     const lines = [`porthole: ${list.length} tour(s).`];
     for (const t of list) {
         const bits = [`${t.steps} steps`];
+        if (t.archivedAt) bits.push("ARCHIVED");
         if (t.active) bits.push("ACTIVE");
         else if (t.loaded) bits.push("loaded");
         else bits.push("saved, not loaded");
@@ -275,7 +281,19 @@ export async function manage(args = {}, sessionSource = null) {
         return `porthole: deleted '${tourId}' from the library and from disk.`;
     }
 
-    return `porthole: '${action}' is not one of activate, goto, close, delete.`;
+    if (action === "archive" || action === "unarchive") {
+        const result = await callCompanion(
+            "tour-archive",
+            { tourId, archived: action === "archive" },
+            companionOptions(process.cwd(), sessionSource),
+        );
+        if (!result.ok) return `porthole: ${explain(result)}`;
+        return action === "archive"
+            ? `porthole: archived '${tourId}'. It is hidden from the default Tour Library but remains saved.`
+            : `porthole: unarchived '${tourId}'. It is back in this session's Tour Library.`;
+    }
+
+    return `porthole: '${action}' is not one of activate, goto, close, archive, unarchive, delete.`;
 }
 
 /** The pre-library name, kept so /tour-exit keeps working. */
@@ -406,6 +424,11 @@ export function tools(getSession = null) {
                             "Include each tour's steps and where they now point. Verbose; use " +
                             "when you need to reason about a specific tour's contents.",
                     },
+                    includeArchived: {
+                        type: "boolean",
+                        description:
+                            "Include archived Tours owned by this Copilot session. Default false.",
+                    },
                     repo: {
                         type: "string",
                         description: "Only tours saved against this repository path.",
@@ -456,16 +479,21 @@ export function tools(getSession = null) {
         {
             name: "porthole_tour_manage",
             description:
-                "Switch, close or delete a walkthrough in the user's VS Code window, by id.\n\n" +
+                "Switch, close, archive, unarchive or delete a Tour in this Copilot session's " +
+                "Porthole window, by id.\n\n" +
                 "  activate - make this the tour the user is walking, loading it from disk if " +
                 "needed from this session's Tour Library.\n" +
                 "  goto     - activate it and jump straight to a particular step.\n" +
                 "  close    - stop walking it. It stays in the library, in the Problems panel " +
                 "and on disk.\n" +
+                "  archive  - hide it durably from the default Tour Library while keeping it " +
+                "saved and searchable with porthole_tours includeArchived.\n" +
+                "  unarchive - return an archived Tour to the default Tour Library.\n" +
                 "  delete   - remove it from the library and from disk. Destructive; only when " +
                 "the user asks.\n\n" +
-                "Use porthole_tours first to find the id. Closing is not deleting - prefer " +
-                "close unless the user actually wants the walkthrough gone.",
+                "Use porthole_tours first to find the id. Close, Archive and Delete are distinct: " +
+                "prefer close for a pause, archive for durable decluttering, and delete only " +
+                "when the user wants the Tour permanently removed.",
             parameters: {
                 type: "object",
                 properties: {
@@ -475,7 +503,7 @@ export function tools(getSession = null) {
                     },
                     action: {
                         type: "string",
-                        enum: ["activate", "goto", "close", "delete"],
+                        enum: ["activate", "goto", "close", "archive", "unarchive", "delete"],
                         description: "What to do with it. Defaults to activate.",
                     },
                     step: {

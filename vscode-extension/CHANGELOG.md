@@ -41,6 +41,11 @@ separate from the Tour Library. Import creates a current-session-owned copy with
 source provenance, safe collision naming, and confirmed replacement without
 mutating the historical source.
 
+Added durable Archive/Unarchive for session-owned Tours. Archived Tours leave
+the active visuals and default library but remain on disk and available through
+an explicit archived picker or `includeArchived`. Close, Archive and Delete now
+have distinct UI and model-facing actions.
+
 ## 0.6.0
 
 **One Copilot session, one addressed window.** Each companion window now

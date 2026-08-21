@@ -139,7 +139,7 @@ once, with one active**.
   name. The panel becomes the map of the change; the active tour is where you
   are standing in it.
 - The **sidebar** lists them all. Click one to walk it; inline buttons stop or
-  delete it.
+  archive or delete it.
 - `Alt+]` / `Alt+[` step through the active tour.
 
 Tours are saved into their owning session folder automatically, so closing the
@@ -149,6 +149,11 @@ A fork starts with an empty Tour Library.
 Only tours created by the session bound to a window are restored automatically.
 Ordinary listing, activation and deletion never scan another session's Tour
 Library, even when both sessions use the same repository or Tour ID.
+
+**Close**, **Archive**, and **Delete** are distinct. Close pauses a Walkthrough;
+Archive hides the Tour durably while keeping it searchable through
+`porthole_tours` with `includeArchived`; Delete permanently removes only that
+session's owned Tour after confirmation.
 
 Because line numbers rot, every step records a hash of the code it was written
 about. When a tour is reopened, each step is either found where it was, found

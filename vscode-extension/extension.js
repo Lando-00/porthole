@@ -119,6 +119,9 @@ async function dispatch(route, payload) {
         case "tour-import":
             return tourstore.importTour(payload);
 
+        case "tour-archive":
+            return tourstore.setArchived(payload);
+
         case "review-save":
             return reviews.save(payload);
 

@@ -151,6 +151,16 @@
         "command": "porthole.clearSessionBinding",
         "title": "porthole: Clear session binding",
         "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "porthole.tour.archive",
+        "title": "porthole: Archive tour",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "porthole.tour.restoreArchived",
+        "title": "porthole: Restore archived tour",
+        "icon": "$(history)"
       }
     ],
     "viewsContainers": {
@@ -372,6 +382,11 @@
           "command": "porthole.tour.closeAll",
           "when": "view == porthole.tour && porthole.tourLibrary",
           "group": "navigation@3"
+        },
+        {
+          "command": "porthole.tour.restoreArchived",
+          "when": "view == porthole.tour && porthole.sessionFound",
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [
@@ -387,6 +402,11 @@
         },
         {
           "command": "porthole.tour.delete",
+          "when": "view == porthole.tour && viewItem =~ /^tour(Active|Inactive)$/",
+          "group": "inline@3"
+        },
+        {
+          "command": "porthole.tour.archive",
           "when": "view == porthole.tour && viewItem =~ /^tour(Active|Inactive)$/",
           "group": "inline@2"
         }

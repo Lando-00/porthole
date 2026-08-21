@@ -327,6 +327,11 @@ Tour summaries and does not load them. `tour-import` creates an independent
 current-session copy with Tour Provenance. Collisions derive a safe ID unless
 the user explicitly confirms replacement.
 
+`tour-archive` durably hides one owned Tour from the default library without
+deleting it. The sidebar offers **Archive tour** and **Restore archived tour**;
+restoring loads the Tour back when its steps resolve. Close remains a temporary
+Walkthrough pause, while Delete remains confirmed and permanent.
+
 `tour-activate` takes `{ tourId, step }`, loading the tour from disk first if it
 is not in memory. Acks the tour plus a `staleness` tally when it came off disk.
 
