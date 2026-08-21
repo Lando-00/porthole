@@ -1,13 +1,45 @@
 # Changelog
 
+## 0.7.0
+
+Added a session identity status item showing the session label, repository,
+branch and live CLI health, with a stable colour per session.
+
+Added exact-window focus requests. They run through the addressed inbox, focus
+the selected window's editor and request attention without opening or changing
+the workspace.
+
+Added editable proposed-change previews. Each replacement opens as a
+BEFORE/PROPOSED diff; the user can edit the proposal and explicitly apply or
+cancel. Application is guarded by dirty-editor and on-disk hash checks so a
+stale preview cannot overwrite newer work.
+
+Fixed cross-session tour persistence. An unbound window no longer restores
+walkthroughs from whichever CLI session happens to be live, and walking a tour
+loaded from an older session no longer copies it into the current session.
+Provable legacy copies are left discoverable but are not auto-restored.
+
+## 0.6.0
+
+**One Copilot session, one addressed window.** Each companion window now
+publishes a random `windowId` plus the Copilot session folder in its workspace.
+Normal CLI requests arrive through an owner-only inbox for that exact window,
+so two CLI sessions in the same repository no longer exchange annotations,
+tours, reviews, or Problems-panel results.
+
+Added the `workspace-add` route for deliberate reuse. It runs inside the window
+the user selected instead of relying on `code --reuse-window --add`, which can
+only target the last active window. The CLI refuses to add a second Copilot
+session to a window already bound to one. URI handling remains available for
+manual requests and old CLI versions.
+
 ## 0.5.1
 
-**Presence is republished after every request handled.** The CLI now deletes the
-presence file of any window that fails to answer — it cannot otherwise tell a
-live VS Code from an unrelated process that inherited its pid after a reboot,
-and a power-off leaves those files behind because nothing runs on the way down.
-Republishing on reply is what keeps a merely busy window from being forgotten:
-a slow answer costs one entry, and the next request restores it.
+**Presence is republished after every request handled.** A stale record is not
+deleted merely because one request times out: the window may only be busy, and
+deleting its address would make recovery impossible. A working reply refreshes
+`updatedAt`, so the live window outranks records left behind by an unclean
+shutdown.
 
 Also stopped calling any of this a heartbeat. There is no timer and nothing
 judges freshness by age — the name invited someone to "fix" a stale entry by

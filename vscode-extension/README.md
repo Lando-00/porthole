@@ -77,6 +77,10 @@ automatically and restored when the window reopens — and, because line numbers
 rot, each step carries a hash of the code it was written about, so a tour that
 has gone out of date says so instead of describing whatever now sits there.
 
+Startup restoration uses only the exact session folder present in this
+workspace. Tours loaded deliberately from older sessions keep their original
+storage file; moving through one does not adopt it into the current session.
+
 **Saved reviews.** Save the current findings and load them again later, even
 from a different session. Findings carry a hash of the code they describe, so a
 review that has gone stale says so instead of marking innocent lines.
@@ -92,6 +96,18 @@ language server when it is warm and a definition scan when it is not.
 
 **A sidebar.** The current Copilot session, the project and branch, plan.md and
 checkpoints, the agent's task list grouped by status, and the tour library.
+
+**Session identity.** A left-side status item shows the session name,
+repository, branch and connection health. Its stable per-session colour helps
+distinguish several Porthole windows at a glance; click it to open the sidebar.
+
+**Editable change previews.** Copilot can open proposed replacements as normal
+VS Code diffs. Edit the PROPOSED side, then explicitly apply or cancel. Porthole
+refuses stale previews rather than overwriting files changed during review.
+
+**Exact-window focus.** The CLI can address one `windowId` and ask that companion
+to focus its editor or request attention, without opening or modifying a
+workspace.
 
 ## Install
 
@@ -122,25 +138,25 @@ npm run install-local     # packages the VSIX and installs it into Insiders
 
 ## How the CLI talks to it
 
-One direction only: the CLI fires a URI at the editor, and the editor writes a
-reply to a file. No socket, no listening port, nothing running in the
-background.
+Each window publishes a random `windowId` and the Copilot session folder in its
+workspace. Normal requests are written to that exact window's owner-only inbox:
 
 ```
-1. CLI writes    <tmp>/porthole/req/<requestId>.json     the payload
-2. CLI fires     vscode-insiders://lando-00.porthole-companion/<route>?req=<requestId>
-3. companion     reads the payload, deletes it, does the work
+1. CLI selects   the window bound to the current Copilot session
+2. CLI writes    ~/.copilot/porthole/inbox/<windowId>/<requestId>.json
+3. that window   reads the request and does the work
 4. companion     writes <tmp>/porthole/ack/<requestId>.json  ->  { ok, ... }
 5. CLI polls     for the ack, then reports what actually happened
 ```
 
-Step 5 is the point. A URI is fire-and-forget, so without an ack a missing
-companion looks exactly like a working one — spawning the launcher always
-"succeeds".
+No socket and no listening port. The inbox is event-driven and scoped to one
+extension host. URI requests remain supported for manual use and older CLI
+versions, but a URI can select only Stable versus Insiders — not one particular
+window when several are open.
 
 Each window also writes `~/.copilot/porthole/companion-<pid>.json` while it is
-running, so the CLI can find a live companion and its URI scheme without paying
-for `code --list-extensions`. Entries whose process is gone are ignored.
+running, including `windowId`, `sessionId`, `sessionFolder`, workspace folders,
+and the URI scheme. The PID proves liveness; `windowId` is the address.
 
 Two Windows details worth knowing, both learned the hard way:
 
@@ -158,10 +174,34 @@ No payload. Acks with the window's identity — used by `/porthole` to prove the
 companion is reachable and to measure the round trip.
 
 ```jsonc
-{ "ok": true, "pid": 28556, "version": "0.2.0", "uriScheme": "vscode-insiders",
-  "appName": "Visual Studio Code - Insiders", "hostSqlite": true,
-  "workspaceFolders": ["c:\\Dev\\porthole"] }
+{ "ok": true, "windowId": "6f2d9e603f1759a1", "pid": 28556,
+  "version": "0.7.0", "uriScheme": "vscode-insiders",
+  "sessionId": "eeb847a2-...", "appName": "Visual Studio Code - Insiders",
+  "workspaceFolders": ["c:\\Dev\\porthole", "c:\\Users\\me\\.copilot\\session-state\\eeb847a2-..."] }
 ```
+
+### `workspace-add`
+
+Takes `{ folders: ["C:\\repo", "C:\\Users\\me\\.copilot\\session-state\\<id>"] }`.
+Adds only missing absolute folders to this exact window and acknowledges what
+changed. This is the safe route for an explicit “reuse that window” request;
+the VS Code CLI's `--add` flag cannot target a chosen window. The CLI permits
+this only for an unbound window or the same session; it refuses to mix two
+Copilot session folders in one companion window.
+
+### `focus`
+
+No payload. Runs only in the addressed companion window, focuses its active
+editor, and requests attention if the operating system keeps the window in the
+background. It does not open or alter the workspace.
+
+### `preview`
+
+Takes `{ title, changes: [{ file, content }] }`, where `content` is the complete
+proposed file. Opens editable BEFORE/PROPOSED diffs and waits for
+**Apply reviewed changes** or **Cancel**. Before applying, it rejects dirty
+target editors and verifies that every on-disk file still matches the snapshot
+shown to the user.
 
 ### `reveal`
 

@@ -15,6 +15,7 @@ import { callCompanion, explain } from "./companion.mjs";
 import { config } from "./config.mjs";
 import { projectRoot } from "./git.mjs";
 import { launchEditor, resolveEditorTarget } from "./editor.mjs";
+import { companionOptions } from "./target.mjs";
 
 const SEVERITIES = ["info", "warn", "error", "note"];
 
@@ -37,13 +38,24 @@ function normaliseSeverity(value) {
     return SEVERITIES.includes(severity) ? severity : "info";
 }
 
+function canUseUntargetedFallback(result) {
+    return (
+        result.reason === "absent" &&
+        (!Array.isArray(result.candidates) || result.candidates.length === 0)
+    );
+}
+
 /**
  * Sends an annotation set to the companion.
  *
  * Returns a human-readable string either way: a tool that fails silently is
  * worse than one that says it cannot reach the editor.
  */
-export async function annotate({ title, clearExisting, annotations, focus }, cwd = process.cwd()) {
+export async function annotate(
+    { title, clearExisting, annotations, focus },
+    cwd = process.cwd(),
+    sessionSource = null,
+) {
     const entries = [];
     const missing = [];
 
@@ -76,7 +88,7 @@ export async function annotate({ title, clearExisting, annotations, focus }, cwd
             focus: Number.isInteger(focus) ? focus : 0,
             annotations: entries,
         },
-        { contextPath: dirname(entries[0].file) },
+        companionOptions(dirname(entries[0].file), sessionSource),
     );
 
     if (!result.ok) return `porthole: could not annotate - ${explain(result)}`;
@@ -91,8 +103,12 @@ export async function annotate({ title, clearExisting, annotations, focus }, cwd
     );
 }
 
-export async function clearAnnotations() {
-    const result = await callCompanion("annotate-clear");
+export async function clearAnnotations(sessionSource = null) {
+    const result = await callCompanion(
+        "annotate-clear",
+        null,
+        companionOptions(process.cwd(), sessionSource),
+    );
     return result.ok
         ? "porthole: cleared all annotations."
         : `porthole: could not clear annotations - ${explain(result)}`;
@@ -162,18 +178,22 @@ export async function goto(session, raw, message, cwd = process.cwd()) {
                     ],
                 },
                 cwd,
+                session,
             );
         }
 
         const result = await callCompanion(
             "reveal",
             { file, start: target.startLine, end: target.endLine },
-            { contextPath: dirname(file) },
+            companionOptions(dirname(file), session),
         );
         if (result.ok) {
             return `porthole: highlighted ${short(file, cwd)} lines ${result.startLine}-${result.endLine}.`;
         }
 
+        if (!canUseUntargetedFallback(result)) {
+            return `porthole: could not open the requested session window.\n  ${explain(result)}`;
+        }
         openAtLine(session, file, target.startLine, cwd);
         return (
             `porthole: opened ${short(file, cwd)} at line ${target.startLine}, without the range selection.\n` +
@@ -185,15 +205,35 @@ export async function goto(session, raw, message, cwd = process.cwd()) {
         target.kind === "point"
             ? `:${target.startLine}${target.column ? `:${target.column}` : ""}`
             : "";
+    const revealed = await callCompanion(
+        "reveal",
+        {
+            file,
+            start: target.kind === "point" ? target.startLine : 1,
+            end: target.kind === "point" ? target.startLine : 1,
+        },
+        companionOptions(dirname(file), session),
+    );
+    if (revealed.ok) {
+        return `porthole: opened ${short(file, cwd)}${position}.`;
+    }
+    if (!canUseUntargetedFallback(revealed)) {
+        return `porthole: could not open the requested session window.\n  ${explain(revealed)}`;
+    }
     openAtLine(session, file, target.kind === "point" ? target.startLine : null, cwd, position);
-    return `porthole: opened ${short(file, cwd)}${position}.`;
+    return (
+        `porthole: opened ${short(file, cwd)}${position}, but could not confirm the target window.\n` +
+        `  ${explain(revealed)}`
+    );
 }
 
 async function gotoSymbol(session, query, message, cwd) {
     const result = await callCompanion(
         "symbol",
         { query, message: message || undefined, severity: "info" },
-        { contextPath: cwd, timeoutMs: Math.max(config().companionTimeoutMs, 6000) },
+        companionOptions(cwd, session, {
+            timeoutMs: Math.max(config().companionTimeoutMs, 6000),
+        }),
     );
 
     if (result.ok) {
@@ -306,7 +346,7 @@ export function tools(getSession) {
                 },
                 required: ["annotations"],
             },
-            handler: async (args) => annotate(args),
+            handler: async (args) => annotate(args, process.cwd(), getSession),
         },
         {
             name: "porthole_goto",

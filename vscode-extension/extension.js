@@ -4,13 +4,15 @@
 // select a range, leave annotations on code, resolve a symbol, and answer
 // "are you there?".
 //
-// Everything arrives as a URI:
+// Requests arrive either as a URI (including the manual/legacy form) or as an
+// addressed JSON file in this window's inbox:
 //
 //   vscode-insiders://lando-00.porthole-companion/<route>?req=<requestId>
 //   vscode-insiders://lando-00.porthole-companion/reveal?file=<abs>&start=10&end=20
+//   ~/.copilot/porthole/inbox/<windowId>/<requestId>.json
 //
-// Routes taking more than a couple of numbers read their payload from a file
-// and write an ack back - see src/transport.js for the contract.
+// Both transports write the same ack shape - see src/transport.js and
+// src/inbox.js for their contracts.
 //
 // Plain JavaScript against the stable VS Code API: no build step, no runtime
 // dependencies.
@@ -20,6 +22,7 @@ const vscode = require("vscode");
 const log = require("./src/log");
 const transport = require("./src/transport");
 const presence = require("./src/presence");
+const inbox = require("./src/inbox");
 const reveal = require("./src/reveal");
 const annotations = require("./src/annotations");
 const diagnostics = require("./src/diagnostics");
@@ -31,6 +34,10 @@ const onboarding = require("./src/onboarding");
 const send = require("./src/send");
 const symbols = require("./src/symbols");
 const views = require("./src/views");
+const workspace = require("./src/workspace");
+const identity = require("./src/identity");
+const focus = require("./src/focus");
+const preview = require("./src/preview");
 
 const VERSION = require("./package.json").version;
 
@@ -52,6 +59,9 @@ const KNOWN = new Set([
     "review-save",
     "review-list",
     "review-load",
+    "workspace-add",
+    "focus",
+    "preview",
 ]);
 
 /** Routes that are implemented elsewhere and land later in the plan. */
@@ -67,6 +77,7 @@ const PAYLOAD_OPTIONAL = new Set([
     "tour-list",
     "review-save",
     "review-list",
+    "focus",
 ]);
 
 async function dispatch(route, payload) {
@@ -121,12 +132,105 @@ async function dispatch(route, payload) {
         case "review-load":
             return reviews.load(payload);
 
+        case "workspace-add":
+            return workspace.add(vscode, payload);
+
+        case "focus":
+            return focus.focus(vscode);
+
+        case "preview":
+            return preview.preview(vscode, payload);
+
         default:
             if (PLANNED.has(route)) {
                 return { ok: false, error: `route '${route}' is not implemented yet` };
             }
             return { ok: false, error: `unknown route '${route}'` };
     }
+}
+
+function normaliseRoute(route) {
+    if (typeof route !== "string") return null;
+    return route.replace(/^\/+/, "").toLowerCase();
+}
+
+/**
+ * Runs one request from either transport.
+ *
+ * URI handling and exact-window inbox handling deliberately enter here after
+ * their transport-specific parsing. Keeping validation, dispatch, acking and
+ * presence refresh in one place prevents a new route from working over one
+ * channel and silently drifting over the other.
+ */
+async function executeRequest(route, payload, requestId = null, source = "uri") {
+    const normalised = normaliseRoute(route);
+    log.diag(`handle ${source} route=${normalised ?? "-"} req=${requestId || "-"}`);
+
+    // Route validity first: an unknown route with no payload should say so,
+    // rather than blaming the payload.
+    if (normalised === null || !KNOWN.has(normalised)) {
+        const result = {
+            ok: false,
+            error:
+                normalised === null
+                    ? "route was missing or invalid"
+                    : `unknown route '${normalised}'`,
+        };
+        transport.writeAck(requestId, {
+            ok: false,
+            error: result.error,
+        });
+        if (!requestId) {
+            vscode.window.showWarningMessage(
+                normalised === null
+                    ? `porthole: ${result.error}`
+                    : `porthole: unknown route '${normalised}'.`,
+            );
+        }
+        return result;
+    }
+
+    if (requestId && payload === null && !PAYLOAD_OPTIONAL.has(normalised)) {
+        const result = {
+            ok: false,
+            error: "payload file was missing or unreadable",
+        };
+        transport.writeAck(requestId, {
+            ok: false,
+            error: "payload file was missing or unreadable",
+        });
+        return result;
+    }
+
+    let result;
+    try {
+        result = await dispatch(normalised, payload || {});
+    } catch (err) {
+        result = { ok: false, error: err && err.message ? err.message : String(err) };
+    }
+    if (!result || typeof result !== "object") {
+        result = { ok: false, error: "route returned no result" };
+    }
+
+    log.diag(
+        `route=${normalised} ok=${result.ok}${result.error ? ` error=${result.error}` : ""}`,
+    );
+    transport.writeAck(requestId, result);
+    presence.write(vscode, VERSION);
+    identity.refresh();
+
+    // Republish presence on the way out. Not self-healing - a record that fails
+    // to answer is never deleted - but it keeps `updatedAt`, sessionId and
+    // sessionFolder fresh on a window that is actually in use. Readers sort
+    // newest-first, so a working window outranks one left over from a previous
+    // boot.
+
+    // Only surface a problem when nobody is waiting on an ack; otherwise the
+    // CLI reports it, and a modal-ish toast on top of that is just noise.
+    if (!result.ok && !requestId) {
+        vscode.window.showWarningMessage(`porthole: ${result.error}`);
+    }
+    return result;
 }
 
 async function handleUri(uri) {
@@ -137,46 +241,11 @@ async function handleUri(uri) {
     // Payload-file routes carry only `req`; legacy /reveal carries its
     // parameters inline. Falling back to the query keeps both working.
     const payload = requestId ? transport.readPayload(requestId) : query;
+    return executeRequest(route, payload, requestId, "uri");
+}
 
-    log.diag(`handleUri route=${route} req=${requestId || "-"} query=${uri.query || ""}`);
-
-    // Route validity first: an unknown route with no payload should say so,
-    // rather than blaming the payload.
-    if (!KNOWN.has(route)) {
-        transport.writeAck(requestId, { ok: false, error: `unknown route '${route}'` });
-        if (!requestId) vscode.window.showWarningMessage(`porthole: unknown route '${route}'.`);
-        return;
-    }
-
-    if (requestId && payload === null && !PAYLOAD_OPTIONAL.has(route)) {
-        transport.writeAck(requestId, {
-            ok: false,
-            error: "payload file was missing or unreadable",
-        });
-        return;
-    }
-
-    let result;
-    try {
-        result = await dispatch(route, payload || {});
-    } catch (err) {
-        result = { ok: false, error: err && err.message ? err.message : String(err) };
-    }
-
-    log.diag(`route=${route} ok=${result.ok}${result.error ? ` error=${result.error}` : ""}`);
-    transport.writeAck(requestId, result);
-
-    // Republish presence on the way out. Not self-healing - a record that fails
-    // to answer is never deleted - but it keeps `updatedAt` fresh on a window
-    // that is actually in use, and readers sort newest-first. That is what puts
-    // a working window ahead of one left over from a previous boot.
-    presence.write(vscode, VERSION);
-
-    // Only surface a problem when nobody is waiting on an ack; otherwise the
-    // CLI reports it, and a modal-ish toast on top of that is just noise.
-    if (!result.ok && !requestId) {
-        vscode.window.showWarningMessage(`porthole: ${result.error}`);
-    }
+function handleInboxRequest(request) {
+    return executeRequest(request.route, request.payload, request.requestId, "inbox");
 }
 
 function activate(context) {
@@ -186,7 +255,7 @@ function activate(context) {
     transport.ensureDirs();
     transport.sweep();
 
-    presence.start(vscode, context, VERSION);
+    const windowId = presence.start(vscode, context, VERSION);
     // Before annotations: publishing an annotation needs the collection to
     // exist already.
     diagnostics.activate(context);
@@ -196,6 +265,7 @@ function activate(context) {
     reviews.activate(context);
     send.activate(context);
     views.activate(context);
+    identity.activate(context);
     context_.activate(context);
     onboarding.activate(context);
 
@@ -205,6 +275,11 @@ function activate(context) {
         annotations.republish();
         tour.republishAll();
     });
+
+    // The inbox is the addressed path used by new CLI callers. Start it only
+    // after route modules are ready; its initial scan handles requests written
+    // while the extension host was activating.
+    context.subscriptions.push(inbox.start(windowId, handleInboxRequest));
 
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {
@@ -242,8 +317,17 @@ function activate(context) {
 }
 
 function deactivate() {
+    inbox.stop();
     presence.remove();
     reveal.dispose();
 }
 
-module.exports = { activate, deactivate };
+module.exports = {
+    activate,
+    deactivate,
+    dispatch,
+    executeRequest,
+    handleUri,
+    KNOWN,
+    PAYLOAD_OPTIONAL,
+};

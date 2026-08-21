@@ -20,6 +20,7 @@ import { isAbsolute, resolve } from "node:path";
 
 import { callCompanion, explain } from "./companion.mjs";
 import { ensureCompanion } from "./ensure.mjs";
+import { companionOptions } from "./target.mjs";
 
 const MAX_STEPS = 50;
 
@@ -78,7 +79,7 @@ export async function tour(args = {}, getSession = null) {
             activate: args.activate !== false,
             replace: args.replace,
         },
-        { contextPath: root },
+        companionOptions(root, getSession),
     );
 
     if (!result.ok) return `porthole: ${explain(result)}${openNote}`;
@@ -114,11 +115,11 @@ export async function tour(args = {}, getSession = null) {
 
 // --- listing ----------------------------------------------------------------
 
-export async function tours(args = {}) {
+export async function tours(args = {}, sessionSource = null) {
     const result = await callCompanion(
         "tour-list",
         { includeSteps: args.includeSteps === true, repo: args.repo, limit: args.limit },
-        { contextPath: process.cwd() },
+        companionOptions(process.cwd(), sessionSource),
     );
     if (!result.ok) return `porthole: ${explain(result)}`;
 
@@ -169,7 +170,7 @@ function describeStaleness(s) {
 
 // --- activate / close / delete / goto ---------------------------------------
 
-export async function manage(args = {}) {
+export async function manage(args = {}, sessionSource = null) {
     const action = String(args.action || "activate");
     const tourId = String(args.tourId || "").trim();
 
@@ -181,7 +182,7 @@ export async function manage(args = {}) {
         const result = await callCompanion(
             "tour-activate",
             { tourId, step: Number.isInteger(args.step) ? args.step : undefined },
-            { contextPath: process.cwd() },
+            companionOptions(process.cwd(), sessionSource),
         );
         if (!result.ok) return `porthole: ${explain(result)}`;
 
@@ -197,9 +198,11 @@ export async function manage(args = {}) {
     }
 
     if (action === "close") {
-        const result = await callCompanion("tour-exit", tourId ? { tourId } : {}, {
-            contextPath: process.cwd(),
-        });
+        const result = await callCompanion(
+            "tour-exit",
+            tourId ? { tourId } : {},
+            companionOptions(process.cwd(), sessionSource),
+        );
         if (!result.ok) return `porthole: ${explain(result)}`;
         return (
             `porthole: stopped walking ${tourId ? `'${tourId}'` : "the active tour"}. ` +
@@ -208,7 +211,11 @@ export async function manage(args = {}) {
     }
 
     if (action === "delete") {
-        const result = await callCompanion("tour-delete", { tourId }, { contextPath: process.cwd() });
+        const result = await callCompanion(
+            "tour-delete",
+            { tourId },
+            companionOptions(process.cwd(), sessionSource),
+        );
         if (!result.ok) return `porthole: ${explain(result)}`;
         return `porthole: deleted '${tourId}' from the library and from disk.`;
     }
@@ -217,8 +224,12 @@ export async function manage(args = {}) {
 }
 
 /** The pre-library name, kept so /tour-exit keeps working. */
-export async function exitTour() {
-    const result = await callCompanion("tour-exit", {}, { contextPath: process.cwd() });
+export async function exitTour(sessionSource = null) {
+    const result = await callCompanion(
+        "tour-exit",
+        {},
+        companionOptions(process.cwd(), sessionSource),
+    );
     return result.ok
         ? "porthole: stopped walking the active tour. It stays in the library."
         : `porthole: ${explain(result)}`;
@@ -348,7 +359,7 @@ export function tools(getSession = null) {
                     limit: { type: "integer", description: "Maximum tours to return. Default 50." },
                 },
             },
-            handler: async (args) => tours(args),
+            handler: async (args) => tours(args, getSession),
         },
 
         {
@@ -383,7 +394,7 @@ export function tools(getSession = null) {
                 },
                 required: ["tourId"],
             },
-            handler: async (args) => manage(args),
+            handler: async (args) => manage(args, getSession),
         },
     ];
 }

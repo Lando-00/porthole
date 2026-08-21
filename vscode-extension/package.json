@@ -1,8 +1,8 @@
 {
   "name": "porthole-companion",
   "displayName": "porthole companion",
-  "description": "Copilot CLI walks you through your code in your own editor: narrated, step-by-step walkthroughs above the lines they explain, annotations, your Problems panel, and selections sent back.",
-  "version": "0.5.1",
+  "description": "Session-aware VS Code companion for Copilot CLI: walkthroughs, annotations, editable change previews, exact-window routing, Problems, and selections sent back.",
+  "version": "0.7.0",
   "publisher": "Lando-00",
   "license": "MIT",
   "icon": "icon.png",

@@ -35,7 +35,7 @@ function isSessionDir(dir) {
  * /cops produces and it is unambiguous. Otherwise fall back to a session that
  * is currently in use: the CLI drops an inuse.<pid>.lock while it is running.
  */
-function findSession() {
+function findWorkspaceSession() {
     const root = sessionRoot();
 
     for (const folder of vscode.workspace.workspaceFolders || []) {
@@ -46,6 +46,13 @@ function findSession() {
         const dir = path.join(root, relative);
         if (isSessionDir(dir)) return { id: relative, dir, source: "workspace" };
     }
+    return null;
+}
+
+function findSession() {
+    const root = sessionRoot();
+    const workspaceSession = findWorkspaceSession();
+    if (workspaceSession) return workspaceSession;
 
     let best = null;
     let entries = [];
@@ -260,4 +267,10 @@ async function readTodos(dbPath, extensionUri) {
     return readViaHost(dbPath) || (await readViaNode(dbPath, extensionUri));
 }
 
-module.exports = { findSession, describeSession, readTodos, sessionRoot };
+module.exports = {
+    findSession,
+    findWorkspaceSession,
+    describeSession,
+    readTodos,
+    sessionRoot,
+};

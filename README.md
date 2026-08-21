@@ -14,6 +14,10 @@ while it writes, or **walk you through them step by step** — so the explanatio
 and the code are the same conversation. Selections travel the other way too:
 send code from the editor straight into the session.
 
+Each session window identifies itself in the status bar with the session name,
+repository, branch, connection health, and a stable session colour. That makes
+it obvious which CLI conversation owns the window before you start editing.
+
 ## What you would use it for
 
 | You want to… | Try |
@@ -25,6 +29,8 @@ send code from the editor straight into the session.
 | Stop the agent guessing at compile errors | `/problems` — it reads what your language server actually reports |
 | Ask about the code in front of you | Select it, `Ctrl+Alt+.` |
 | See the whole thing on your own code | `/porthole example` |
+| Review risky edits before they land | Ask Copilot to preview the proposed changes in VS Code |
+| Bring this session's editor back | Ask Copilot to focus this session's VS Code window |
 
 `/walkthrough` opens an editor window if none is running. Nothing else does —
 porthole never takes over your screen unless you asked it to.
@@ -38,7 +44,7 @@ same behaviour every time, no model in the loop, no tokens spent.
 
 | Command | What it does |
 |---|---|
-| `/cops` · `/open-session` | Open this worktree + the current session folder in one workspace |
+| `/cops` · `/open-session` | Reuse this session's own window, or open a separate one for it |
 | `/cops dry-run` | Preview it: which editor, whether a window is reused, every path — **without opening or writing anything** |
 | `/cops no-plan` | Same, but don't auto-open the session's `plan.md` |
 | `/vsdiff` | Diffs: no args = uncommitted; or a commit, a range, `staged`, or two file paths |
@@ -69,7 +75,7 @@ same behaviour every time, no model in the loop, no tokens spent.
 
 ## Tools Copilot can call
 
-Eight tools are registered with the agent, so it can drive your editor mid-answer
+Eleven tools are registered with the agent, so it can drive your editor mid-answer
 without you typing anything.
 
 | Tool | What it does |
@@ -81,7 +87,29 @@ without you typing anything.
 | `porthole_tour_manage` | Switches, closes or deletes a walkthrough by id |
 | `porthole_problems` | Reads your Problems panel, so it stops guessing at compile errors |
 | `porthole_review` | Saves findings and loads them back, even in a later session |
-| `porthole_open_session` | `/cops`, on request — described so the agent only opens your editor when you ask |
+| `porthole_open_session` | Opens automatically, forces a new window, or reuses one exact window — only when asked |
+| `porthole_windows` | Lists live porthole windows so Copilot can ask which one you mean |
+| `porthole_focus_window` | Requests attention from one exact session window without changing its workspace |
+| `porthole_preview_changes` | Opens editable proposed-file diffs and applies only after explicit approval |
+
+### Reviewing proposed changes
+
+Ask *"preview these changes in VS Code before applying them"*. Porthole opens a
+diff for each file in this session's exact window. The **PROPOSED** side is an
+ordinary editable document: adjust it, then choose **Apply reviewed changes** or
+**Cancel** from the notification.
+
+Porthole records the original file hashes before opening the preview. It refuses
+to apply if a target changed on disk or has unsaved editor changes while you
+were reviewing, so approval cannot silently overwrite newer work.
+
+### Focusing the right window
+
+`porthole_focus_window` is addressed by `windowId`, using the same exact-window
+inbox as annotations and tours. It never opens a workspace or adds folders. VS
+Code does not expose an extension API for forcibly stealing operating-system
+focus, so a background window focuses its editor and requests attention; an
+already-active window is focused immediately.
 
 Ask *"walk me through how a porthole request reaches VS Code"* and the relevant
 ranges light up in the editor as the explanation arrives. Or run
@@ -107,6 +135,11 @@ once, with one active**.
 Tours are saved into the session folder automatically, so closing the window
 does not lose them, and a later session can pick one up — *"walk me through the
 review you saved yesterday"*.
+
+Only tours created by the session bound to a window are restored automatically.
+A tour deliberately loaded from another session remains owned by its original
+session: walking it updates that original saved copy but does not copy it into
+the current session or make it reappear on the next startup.
 
 Because line numbers rot, every step records a hash of the code it was written
 about. When a tour is reopened, each step is either found where it was, found
@@ -215,6 +248,12 @@ copilot plugin update porthole@porthole-marketplace
 
 The companion updates itself from the Marketplace like any other extension.
 
+The plugin checks its Marketplace version when each Copilot session loads. The
+lookup is cached for 24 hours and times out quickly; network failures stay
+silent. When a newer version exists, Porthole shows an ephemeral warning with
+the installed/latest versions and the safe update command. This logic ships
+inside the plugin extension—there is no separate hook or updater to install.
+
 > **Run the plugin update from a terminal with no Copilot CLI session open.**
 > A running session holds the plugin directory open, and the update replaces it
 > wholesale — from inside a session it fails with `Access is denied (os error 5)`,
@@ -228,7 +267,7 @@ Optional, at `~/.copilot/porthole.json`. Copy
 ```jsonc
 {
   "editor": "insiders",        // insiders | stable | cursor | windsurf | auto | an absolute path
-  "preferConnectedIde": true,  // drive the window you are already in
+  "preferConnectedIde": true,  // prefer the editor build Copilot is connected to
   "workspaceDir": null,        // where generated workspace and diff files go; null = temp
   "companionTimeoutMs": 2000,  // how long to wait for the companion to answer
   "sendMode": "enqueue",       // selections from VS Code: enqueue | immediate
@@ -240,10 +279,10 @@ Editor precedence, highest first:
 
 1. `PORTHOLE_EDITOR`
 2. `editor` in the config
-3. the connected IDE window, when `preferConnectedIde` is on
+3. the launcher used by a connected IDE, when `preferConnectedIde` is on
 4. Insiders, then stable
 
-A standing preference beats the connected window on purpose: someone who wrote
+A standing preference beats the connected editor build on purpose: someone who wrote
 down "always stable" means it. A broken config never breaks a command — it falls
 back to defaults and tells you once.
 
@@ -260,23 +299,34 @@ back to defaults and tells you once.
 - Node 22+ for the sidebar's task list (used only if the editor cannot read
   SQLite itself)
 
-## It reuses your open editor
+## One task, one window
 
-The headline behaviour. Copilot CLI writes a lock file per connected IDE window
-into `~/.copilot/ide/`, recording `ideName`, `pid` and `workspaceFolders`.
-porthole reads those locks, skips any whose process is no longer alive, and
-prefers the window whose workspace contains the path you are working on.
+`/cops` treats the current Copilot session as the window identity. If that
+session already has a porthole window, it reuses it. Otherwise it opens the
+generated workspace with VS Code's hard `--new-window` flag — even when another
+session already has VS Code open.
 
-When a window is found, every command targets **that** window:
+The companion publishes a random `windowId`, its bound Copilot `sessionId`, and
+its workspace folders. Every companion-backed tool targets that exact session
+window, so two sessions in the same repository do not exchange annotations,
+tours, or Problems-panel results.
 
-- `/open-session` adds the session folder to it with `--add` instead of opening
-  a second window on a generated workspace
-- `/vsdiff`, `/goto` and `/scratch` open into it with `--reuse-window`
-- the matching binary is chosen from `ideName`, so an Insiders session never gets
-  hijacked by stable VS Code
+For deliberate exceptions, ask Copilot in normal language:
 
-With no IDE connected, porthole falls back to launching Insiders (then stable).
-`PORTHOLE_EDITOR` and the `editor` config key both override this.
+```text
+Use cops, but open a new window.
+Use cops and add this session to my unbound scratch window.
+```
+
+The model can list live windows and target one exact `windowId`. If several
+windows might match a reuse request, it asks instead of guessing. A window
+already bound to another Copilot session is refused rather than turned into a
+two-session workspace that the sidebar and saved-tour state cannot represent.
+`/cops` itself stays deterministic and always uses the safe automatic policy.
+
+Copilot CLI's IDE lock files still choose the editor build to launch, so an
+Insiders session is not handed to stable VS Code. `PORTHOLE_EDITOR` and the
+`editor` config key override that preference.
 
 Check what porthole sees right now with `/porthole`, or standalone:
 
@@ -303,12 +353,12 @@ New builds are picked up by **new windows**; reload an existing one.
 Both directions, each with a receipt. The full contract is in
 [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
-**CLI → editor:**
+**CLI → one exact editor window:**
 
 ```
-1. CLI writes    <tmp>/porthole/req/<requestId>.json
-2. CLI fires     vscode-insiders://lando-00.porthole-companion/<route>?req=<requestId>
-3. companion     reads the payload, acts
+1. CLI selects   the companion bound to this Copilot session
+2. CLI writes    ~/.copilot/porthole/inbox/<windowId>/<requestId>.json
+3. that window   reads the request and acts
 4. companion     writes <tmp>/porthole/ack/<requestId>.json  ->  { ok, result, ... }
 5. CLI polls     for the ack, then reports what actually happened
 ```
@@ -323,11 +373,10 @@ Both directions, each with a receipt. The full contract is in
 5. companion     reports delivered, or plainly says it could not confirm
 ```
 
-No socket, no listening port, nothing running in the background. Step 5 is the
-point in both: a URI is fire-and-forget, so without an ack a missing companion
-looks exactly like a working one — spawning the launcher always "succeeds". That
-is precisely how an earlier `/cops` managed to report success while opening
-nothing.
+No socket and no listening port. The companion watches only its own owner-only
+inbox. Manual and old-client URI requests remain supported, but normal tool
+traffic uses the addressed inbox because a VS Code URI can select an editor
+build, not a particular window within that build.
 
 The return path lives under `~/.copilot` rather than the temp directory
 on purpose. `/tmp` is shared between local users on Linux and macOS, and this is
@@ -336,9 +385,9 @@ commands.
 
 Each side publishes a presence file — `companion-<pid>.json` and
 `cli-<endpointId>.json` — so either can find the other, and prune it, without
-paying for `code --list-extensions`. Sessions are keyed by a per-process
-endpoint id rather than the session id, because a resumed session can have two
-processes sharing one id.
+paying for `code --list-extensions`. Editor windows are addressed by `windowId`;
+CLI processes are addressed by `endpointId`. Session ids remain routing metadata
+because a resumed session can have two live CLI processes sharing one id.
 
 Two details worth knowing, both found the hard way:
 

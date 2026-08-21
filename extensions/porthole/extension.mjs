@@ -47,8 +47,10 @@ import { problems, tools as problemTools } from "./lib/problems.mjs";
 import { exitTour, tour, tours, tools as tourTools } from "./lib/tour.mjs";
 import { review, tools as reviewTools } from "./lib/reviews.mjs";
 import { openSession, parseArgs, tools as openSessionTools } from "./lib/opensession.mjs";
+import { tools as previewTools } from "./lib/preview.mjs";
 import { git, projectRoot, isGitRepo } from "./lib/git.mjs";
 import { launchEditor, resolveEditorTarget } from "./lib/editor.mjs";
+import { notifyIfUpdateAvailable } from "./lib/update.mjs";
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -260,17 +262,21 @@ async function handleAnnotate(session, ctx) {
     }
 
     await session.log(
-        await annotate({
-            title: message || undefined,
-            annotations: [
-                {
-                    file,
-                    startLine: target.startLine,
-                    endLine: target.endLine || target.startLine,
-                    message,
-                },
-            ],
-        }),
+        await annotate(
+            {
+                title: message || undefined,
+                annotations: [
+                    {
+                        file,
+                        startLine: target.startLine,
+                        endLine: target.endLine || target.startLine,
+                        message,
+                    },
+                ],
+            },
+            process.cwd(),
+            session,
+        ),
     );
 }
 
@@ -294,13 +300,13 @@ const session = await joinSession({
         {
             name: "cops",
             description:
-                "Open this worktree + the current Copilot session folder in one VS Code workspace. Args: dry-run, no-plan",
+                "Open this worktree + session in its own VS Code workspace. Reuses only this session's window. Args: dry-run, no-plan",
             handler: withPresence((ctx) => handleOpenSession(session, ctx)),
         },
         {
             name: "open-session",
             description:
-                "Open this worktree + the current Copilot session folder in one VS Code workspace. Args: dry-run, no-plan",
+                "Open this worktree + session in its own VS Code workspace. Reuses only this session's window. Args: dry-run, no-plan",
             handler: withPresence((ctx) => handleOpenSession(session, ctx)),
         },
         {
@@ -324,7 +330,7 @@ const session = await joinSession({
         {
             name: "annotate-clear",
             description: "Remove every porthole annotation from VS Code",
-            handler: withPresence(async () => session.log(await clearAnnotations())),
+            handler: withPresence(async () => session.log(await clearAnnotations(session))),
         },
         {
             name: "porthole",
@@ -337,7 +343,7 @@ const session = await joinSession({
                     case "example":
                         return session.log(await example(session));
                     case "tours":
-                        return session.log(await tours({}));
+                        return session.log(await tours({}, session));
                     case "unknown":
                         return session.log(unknownSubcommand(ctx.args));
                     // Bare /porthole stays the doctor, so muscle memory survives.
@@ -351,13 +357,15 @@ const session = await joinSession({
             description:
                 "Show the errors and warnings VS Code is currently reporting: /problems [open|workspace]",
             handler: withPresence(async (ctx) =>
-                session.log(await problems({ scope: (ctx.args || "").trim() || "open" })),
+                session.log(
+                    await problems({ scope: (ctx.args || "").trim() || "open" }, session),
+                ),
             ),
         },
         {
             name: "tour-exit",
             description: "Stop walking the active tour. It stays in the library",
-            handler: withPresence(async () => session.log(await exitTour())),
+            handler: withPresence(async () => session.log(await exitTour(session))),
         },
         {
             name: "reviews",
@@ -365,12 +373,16 @@ const session = await joinSession({
                 "Saved review findings: /reviews (list), /reviews load <name>. Named 'reviews' because /review is built in",
             handler: withPresence(async (ctx) => {
                 const [action, ...rest] = (ctx.args || "").trim().split(/\s+/).filter(Boolean);
-                if (!action) return session.log(await review({ action: "list" }));
+                if (!action) return session.log(await review({ action: "list" }, () => session));
                 if (action === "load") {
-                    return session.log(await review({ action: "load", slug: rest[0] }));
+                    return session.log(
+                        await review({ action: "load", slug: rest[0] }, () => session),
+                    );
                 }
                 if (action === "save") {
-                    return session.log(await review({ action: "save", title: rest.join(" ") }));
+                    return session.log(
+                        await review({ action: "save", title: rest.join(" ") }, () => session),
+                    );
                 }
                 return session.log("porthole: usage - /reviews, /reviews load <name>, /reviews save <title>");
             }),
@@ -379,9 +391,10 @@ const session = await joinSession({
     tools: [
         ...portholeTools(() => session),
         ...openSessionTools(() => session),
-        ...problemTools(),
+        ...problemTools(() => session),
         ...tourTools(() => session),
         ...reviewTools(() => session),
+        ...previewTools(() => session),
     ],
 });
 
@@ -396,4 +409,8 @@ const session = await joinSession({
 endpoint.start(session, { version: pluginVersion(), projectRoot: projectRoot(process.cwd()) });
 outbox.start(session);
 
-
+// The plugin extension itself loads once per Copilot session, so this is a
+// startup notice without injecting model context or requiring a separate hook.
+// It runs in the background, uses a daily disk cache, and treats every network
+// failure as silence.
+void notifyIfUpdateAvailable(session, pluginVersion()).catch(() => {});

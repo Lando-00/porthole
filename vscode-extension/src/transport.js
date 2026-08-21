@@ -1,4 +1,5 @@
-// Transport between the porthole Copilot CLI extension and this window.
+// Legacy URI transport between the porthole Copilot CLI extension and this
+// window.
 //
 // The CLI can only push a URI at VS Code, and a URI query is far too small and
 // too fiddly to carry a set of annotations with markdown messages. So anything
@@ -9,6 +10,9 @@
 //   3. we read the payload and delete it
 //   4. we write     <tmp>/porthole/ack/<requestId>.json  ->  { ok, ... }
 //   5. CLI polls for the ack, so it learns whether we actually did the work
+//
+// New exact-window requests use src/inbox.js instead. This module keeps the
+// shared temp req/ack contract for URI payloads and manual/legacy URI behavior.
 //
 // Step 5 is the important one. Without it a missing companion is
 // indistinguishable from a working one, because spawning the launcher always

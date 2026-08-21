@@ -1,7 +1,7 @@
 {
   "name": "porthole",
-  "description": "Copilot annotates the code it is explaining and walks you through it step by step, in the VS Code window you already have open. Also diffs, mermaid diagrams, saved reviews and your Problems panel. Needs the 'porthole companion' VS Code extension.",
-  "version": "0.9.0",
+  "description": "Session-aware VS Code windows for Copilot CLI: walkthroughs, annotations, editable change previews, exact focus, diffs, reviews and Problems.",
+  "version": "0.11.0",
   "author": {
     "name": "Lando-00",
     "url": "https://github.com/Lando-00"

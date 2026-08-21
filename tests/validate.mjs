@@ -245,6 +245,49 @@ check("opening a window is gated behind an explicit opt-in", () => {
     return "gate in place";
 });
 
+check("/cops stays deterministic and session-safe", () => {
+    const extension = readFileSync(join(ROOT, "extensions/porthole/extension.mjs"), "utf8");
+    const start = extension.indexOf("async function handleOpenSession");
+    const end = extension.indexOf("// /vsdiff", start);
+    if (start === -1 || end === -1) throw new Error("could not find handleOpenSession");
+    const handler = extension.slice(start, end);
+    if (handler.includes("session.send(")) {
+        throw new Error("/cops must not hand arguments to the model");
+    }
+    if (!handler.includes("openSession(session, ctx, args)")) {
+        throw new Error("/cops must execute the deterministic open-session path");
+    }
+
+    const open = readFileSync(join(ROOT, "extensions/porthole/lib/opensession.mjs"), "utf8");
+    if (!open.includes('mode = "auto"')) {
+        throw new Error("the default window policy must remain auto");
+    }
+    if (!open.includes('["--new-window", workspaceFile')) {
+        throw new Error("new session workspaces must carry the hard --new-window flag");
+    }
+    return "auto policy, no model handoff";
+});
+
+check("companion selection refuses cross-session project fallback", () => {
+    const source = readFileSync(join(ROOT, "extensions/porthole/lib/companion.mjs"), "utf8");
+    const sessionGuard = source.indexOf("if (sessionId || options.sessionPath)");
+    const contextFallback = source.indexOf("if (options.contextPath)");
+    if (sessionGuard === -1 || contextFallback === -1 || sessionGuard > contextFallback) {
+        throw new Error("session-missing must be decided before project-path fallback");
+    }
+    if (!source.includes('reason: "session-missing"')) {
+        throw new Error("missing exact-session windows must be reported explicitly");
+    }
+    if (!source.includes("samePath(sessionPath, String(folder))")) {
+        throw new Error("session workspace matching must use exact paths, not ancestor matching");
+    }
+    const presence = readFileSync(join(ROOT, "vscode-extension/src/presence.js"), "utf8");
+    if (!presence.includes('require("./session").findWorkspaceSession')) {
+        throw new Error("presence must not bind a window from an unrelated live-session lock");
+    }
+    return "session before project";
+});
+
 check("the example config is accepted by the loader", () => {
     readJson("porthole.example.json");
     return "parses";

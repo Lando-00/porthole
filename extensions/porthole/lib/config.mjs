@@ -4,7 +4,7 @@
 //
 //   {
 //     "editor": "insiders",        // insiders | stable | cursor | windsurf | auto | <abs path>
-//     "preferConnectedIde": true,  // drive the window you are already in
+//     "preferConnectedIde": true,  // prefer the editor build Copilot is connected to
 //     "workspaceDir": null,        // where generated .code-workspace files go
 //     "companionTimeoutMs": 2000,  // how long to wait for a companion ack
 //     "goto": { "symbolFallback": true }

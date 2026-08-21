@@ -5,6 +5,7 @@
 // This asks it.
 
 import { callCompanion, explain } from "./companion.mjs";
+import { companionOptions } from "./target.mjs";
 
 const SEVERITIES = ["error", "warning", "info", "hint"];
 
@@ -48,7 +49,7 @@ function format(result, root) {
     return lines.join("\n").trim();
 }
 
-export async function problems(args = {}) {
+export async function problems(args = {}, sessionSource = null) {
     const root = process.cwd();
     const result = await callCompanion(
         "diagnostics",
@@ -58,14 +59,14 @@ export async function problems(args = {}) {
             severities: Array.isArray(args.severities) ? args.severities : undefined,
             limit: args.limit,
         },
-        { contextPath: root },
+        companionOptions(root, sessionSource),
     );
 
     if (!result.ok) return `porthole: ${explain(result)}`;
     return format(result.result, root);
 }
 
-export function tools() {
+export function tools(getSession = null) {
     return [
         {
             name: "porthole_problems",
@@ -104,7 +105,7 @@ export function tools() {
                     },
                 },
             },
-            handler: async (args) => problems(args),
+            handler: async (args) => problems(args, getSession),
         },
     ];
 }

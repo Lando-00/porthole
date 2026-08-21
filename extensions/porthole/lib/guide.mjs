@@ -69,7 +69,7 @@ const GROUPS = [
     {
         title: "Start here",
         rows: [
-            ["/cops", "Open this project + the Copilot session folder in one workspace"],
+            ["/cops", "Reuse this session's window, or open a separate one for it"],
             ["/porthole example", "Have Copilot demonstrate porthole on your own code"],
             ["/porthole help", "This list"],
             ["/porthole", "Diagnose everything, when something is not working"],

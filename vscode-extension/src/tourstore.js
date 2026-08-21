@@ -22,7 +22,7 @@ const vscode = require("vscode");
 const { diag } = require("./log");
 const anchors = require("./anchors");
 const tour = require("./tour");
-const { findSession, sessionRoot } = require("./session");
+const { findWorkspaceSession, sessionRoot } = require("./session");
 const { projectFolder, gitHead, storedPath, absoluteFile } = require("./repo");
 
 const SCHEMA = 1;
@@ -83,12 +83,10 @@ function save(tourId) {
     const entry = tour.getTour(tourId);
     if (!entry) return { ok: false, error: `no tour called '${tourId}' is loaded` };
 
-    const session = findSession();
+    const session = findWorkspaceSession();
     if (!session) {
-        // Not an error worth surfacing: a window with no session simply has
-        // nowhere to put it, and the tour still works in memory.
-        diag(`tour not saved (no session folder): ${tourId}`);
-        return { ok: false, error: "no Copilot session folder found for this window" };
+        diag(`tour not saved (no exact workspace session): ${tourId}`);
+        return { ok: false, error: "no Copilot session folder is bound to this window" };
     }
 
     const repo = entry.repo || projectFolder();
@@ -100,7 +98,7 @@ function save(tourId) {
         title: entry.title,
         createdAt: entry.createdAt,
         updatedAt: new Date().toISOString(),
-        sessionId: session.id,
+        sessionId: entry.sourceSessionId || session.id,
         endpointId: entry.endpointId || null,
         repo,
         branch: entry.branch ?? head.branch,
@@ -129,7 +127,11 @@ function save(tourId) {
         })),
     };
 
-    const file = fileFor(session.dir, tourId);
+    // A tour deliberately loaded from another session stays owned by that
+    // session. Walking it may update its cursor, but must not copy it into the
+    // current session where startup restore would make the temporary load
+    // permanent.
+    const file = entry.sourceFile || fileFor(session.dir, tourId);
     try {
         fs.mkdirSync(path.dirname(file), { recursive: true });
         // Write then rename, so a reader never sees a half-written tour.
@@ -260,6 +262,8 @@ function list(payload = {}) {
             branch: entry.branch,
             createdAt: entry.createdAt,
             updatedAt: entry.updatedAt,
+            sessionId: entry.sourceSessionId,
+            sourceFile: entry.sourceFile,
             // Present only for a tour that came off disk, and describing how it
             // resolved when it was read. A tour built in this window is current
             // by definition; a tally of zeros for it would read as "checked and
@@ -364,6 +368,8 @@ function loadFromDisk(tourId) {
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
         staleness,
+        sourceFile: record.file,
+        sourceSessionId: record.sessionId,
     });
     if (!adopted) return { ok: false, error: "the tour library is full; close a tour first" };
 
@@ -414,12 +420,24 @@ function remove(payload = {}) {
  * window should show you what you had, not decide what you are looking at.
  */
 function restore() {
-    const session = findSession();
+    const session = findWorkspaceSession();
     if (!session) return { restored: 0 };
 
     let restored = 0;
+    const sessionCreatedAt = createdAtForSession(session.dir);
     for (const record of scan({ sessionId: session.id })) {
         if (tour.has(record.tourId)) continue;
+        // Older builds copied a borrowed tour into the current session on the
+        // first cursor move. They preserved its original createdAt, so a tour
+        // older than the session that allegedly created it is provably such a
+        // clone. Leave it discoverable on disk, but do not auto-restore it.
+        if (
+            sessionCreatedAt &&
+            Date.parse(record.createdAt || "") < sessionCreatedAt
+        ) {
+            diag(`skipped foreign tour clone during restore: ${record.tourId}`);
+            continue;
+        }
         const { steps, staleness } = resolveSteps(record);
         if (steps.length === 0) continue;
         if (
@@ -437,6 +455,8 @@ function restore() {
                 commit: record.commit,
                 createdAt: record.createdAt,
                 updatedAt: record.updatedAt,
+                sourceFile: record.file,
+                sourceSessionId: record.sessionId,
                 // Carried through, so a restored tour can still admit it is out
                 // of date. This is the case where staleness matters most, and
                 // it was the one case that reported nothing.
@@ -445,10 +465,22 @@ function restore() {
         ) {
             restored += 1;
         }
+
     }
 
     if (restored) diag(`restored ${restored} tour(s) from this session`);
     return { restored };
+}
+
+function createdAtForSession(sessionDir) {
+    try {
+        const yaml = fs.readFileSync(path.join(sessionDir, "workspace.yaml"), "utf8");
+        const match = /^created_at:\s*(.+?)\s*$/m.exec(yaml);
+        const value = match ? Date.parse(match[1]) : Number.NaN;
+        return Number.isFinite(value) ? value : null;
+    } catch {
+        return null;
+    }
 }
 
 function activateExtension(context) {

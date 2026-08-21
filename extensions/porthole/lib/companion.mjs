@@ -15,10 +15,19 @@
 // No socket, no port, nothing listening in the background.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+    existsSync,
+    mkdirSync,
+    readdirSync,
+    readFileSync,
+    renameSync,
+    rmSync,
+    statSync,
+    writeFileSync,
+} from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir, homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { config, copilotHome } from "./config.mjs";
 import { connectedIdes, pathsRelated, resolveEditorExe, resolveEditorTarget, whichEditor } from "./editor.mjs";
@@ -26,8 +35,10 @@ import { connectedIdes, pathsRelated, resolveEditorExe, resolveEditorTarget, whi
 const ROOT = join(tmpdir(), "porthole");
 const REQ_DIR = join(ROOT, "req");
 const ACK_DIR = join(ROOT, "ack");
+const INBOX_ROOT = join(copilotHome(), "porthole", "inbox");
 const POLL_INTERVAL_MS = 10;
 const MAX_AGE_MS = 60 * 60 * 1000;
+const WINDOW_ID = /^[a-f0-9]{16}$/;
 
 const EXTENSION_ID = "lando-00.porthole-companion";
 
@@ -94,6 +105,9 @@ export function findCompanions() {
         } catch (err) {
             if (err.code !== "EPERM") {
                 rmSync(file, { force: true }); // the window is gone
+                if (WINDOW_ID.test(String(info.windowId || ""))) {
+                    rmSync(join(INBOX_ROOT, info.windowId), { recursive: true, force: true });
+                }
                 continue;
             }
         }
@@ -103,17 +117,118 @@ export function findCompanions() {
     return found.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
 }
 
-/** The companion most likely to be showing `contextPath`, if any. */
-export function findCompanion(contextPath) {
-    const companions = findCompanions();
-    if (companions.length === 0) return null;
-    if (contextPath) {
-        const match = companions.find((c) =>
-            (c.workspaceFolders || []).some((wf) => wf && pathsRelated(contextPath, String(wf))),
-        );
-        if (match) return match;
+function sessionIdFromPath(sessionPath) {
+    return sessionPath ? basename(String(sessionPath).replace(/[\\/]+$/, "")) : null;
+}
+
+function sameSession(companion, { sessionId, sessionPath }) {
+    if (sessionId && companion.sessionId === sessionId) return true;
+    if (sessionPath && companion.sessionFolder && samePath(sessionPath, companion.sessionFolder)) {
+        return true;
     }
-    return companions[0];
+    return Boolean(
+        sessionPath &&
+            (companion.workspaceFolders || []).some(
+                (folder) => folder && samePath(sessionPath, String(folder)),
+            ),
+    );
+}
+
+function describeCandidate(companion) {
+    return {
+        windowId: companion.windowId || null,
+        pid: companion.pid,
+        appName: companion.appName,
+        sessionId: companion.sessionId || null,
+        sessionFolder: companion.sessionFolder || null,
+        workspaceFolders: companion.workspaceFolders || [],
+    };
+}
+
+/**
+ * Selects one exact companion, or reports why choosing would be unsafe.
+ *
+ * Session identity beats repository identity. Two sessions can work in the
+ * same repository, so a project-path match is only usable when it is unique.
+ */
+export function chooseCompanion(companions, options = {}) {
+    if (companions.length === 0) return { companion: null, reason: "absent", candidates: [] };
+
+    if (options.windowId) {
+        const match = companions.find((c) => c.windowId === options.windowId);
+        return match
+            ? { companion: match, reason: null, candidates: [] }
+            : {
+                  companion: null,
+                  reason: "unknown-window",
+                  candidates: companions.map(describeCandidate),
+              };
+    }
+
+    const sessionId = options.sessionId || sessionIdFromPath(options.sessionPath);
+    const sessionMatches = companions.filter((c) =>
+        sameSession(c, { sessionId, sessionPath: options.sessionPath }),
+    );
+    if (sessionMatches.length === 1) {
+        return { companion: sessionMatches[0], reason: null, candidates: [] };
+    }
+    if (sessionMatches.length > 1) {
+        return {
+            companion: null,
+            reason: "ambiguous",
+            candidates: sessionMatches.map(describeCandidate),
+        };
+    }
+
+    if (sessionId || options.sessionPath) {
+        // A modern companion that names another session is not a project-path
+        // fallback. That is the exact cross-session misroute this selector
+        // exists to prevent. A sole legacy companion may still be used while
+        // the separately-published VSIX catches up.
+        const legacy = companions.filter((c) => !c.windowId && !c.sessionId);
+        if (companions.length === 1 && legacy.length === 1) {
+            return { companion: legacy[0], reason: null, candidates: [] };
+        }
+        return {
+            companion: null,
+            reason: "session-missing",
+            candidates: companions.map(describeCandidate),
+        };
+    }
+
+    if (options.contextPath) {
+        const matches = companions.filter((c) =>
+            (c.workspaceFolders || []).some(
+                (wf) => wf && pathsRelated(options.contextPath, String(wf)),
+            ),
+        );
+        if (matches.length === 1) return { companion: matches[0], reason: null, candidates: [] };
+        if (matches.length > 1) {
+            return {
+                companion: null,
+                reason: "ambiguous",
+                candidates: matches.map(describeCandidate),
+            };
+        }
+    }
+
+    if (companions.length === 1) {
+        return { companion: companions[0], reason: null, candidates: [] };
+    }
+    return {
+        companion: null,
+        reason: "ambiguous",
+        candidates: companions.map(describeCandidate),
+    };
+}
+
+export function selectCompanion(options = {}) {
+    return chooseCompanion(findCompanions(), options);
+}
+
+/** The one safe companion for this target, if any. */
+export function findCompanion(contextPath, options = {}) {
+    return selectCompanion({ ...options, contextPath }).companion;
 }
 
 /**
@@ -161,23 +276,38 @@ export async function callCompanion(route, payload = null, options = {}) {
     const contextPath = options.contextPath || null;
     const timeoutMs = options.timeoutMs ?? config().companionTimeoutMs;
 
-    const companion = findCompanion(contextPath);
+    const selected = selectCompanion({
+        contextPath,
+        sessionPath: options.sessionPath,
+        sessionId: options.sessionId,
+        windowId: options.windowId,
+    });
+    const companion = selected.companion;
     if (!companion) {
+        if (
+            selected.reason === "ambiguous" ||
+            selected.reason === "unknown-window" ||
+            selected.reason === "session-missing"
+        ) {
+            return {
+                ok: false,
+                reason:
+                    selected.reason === "session-missing" ? "absent" : selected.reason,
+                error:
+                    selected.reason === "unknown-window"
+                        ? `the requested VS Code window '${options.windowId}' is no longer available`
+                        : selected.reason === "session-missing"
+                          ? "no VS Code window is bound to this Copilot session"
+                        : "more than one VS Code window could handle this request",
+                candidates: selected.candidates,
+            };
+        }
         // Without a heartbeat there is nothing listening, and firing the URI
         // anyway would just burn the whole timeout before saying so.
         return {
             ok: false,
             reason: "absent",
             error: "no VS Code window with the porthole companion is running",
-        };
-    }
-
-    const exe = resolveCompanionExe(companion, contextPath);
-    if (!exe) {
-        return {
-            ok: false,
-            reason: "absent",
-            error: "could not find the editor executable to deliver the request to",
         };
     }
 
@@ -190,16 +320,34 @@ export async function callCompanion(route, payload = null, options = {}) {
     sweep();
 
     const requestId = `${Date.now()}-${randomUUID().slice(0, 8)}`;
-    if (payload !== null) {
-        writeFileSync(join(REQ_DIR, `${requestId}.json`), JSON.stringify(payload), "utf8");
+    let spawnError = null;
+    let inboxFile = null;
+    if (WINDOW_ID.test(String(companion.windowId || ""))) {
+        const written = writeInbox(companion.windowId, {
+            requestId,
+            route,
+            payload,
+        });
+        spawnError = written.error;
+        inboxFile = written.file;
+    } else {
+        const exe = resolveCompanionExe(companion, contextPath);
+        if (!exe) {
+            return {
+                ok: false,
+                reason: "absent",
+                error: "could not find the editor executable to deliver the request to",
+            };
+        }
+        if (payload !== null) {
+            writeFileSync(join(REQ_DIR, `${requestId}.json`), JSON.stringify(payload), "utf8");
+        }
+        // Old companions have no addressed inbox. The selector permits this
+        // fallback only when that old window is unambiguous.
+        const scheme = companion.uriScheme || (/insiders/i.test(exe) ? "vscode-insiders" : "vscode");
+        const uri = `${scheme}://${EXTENSION_ID}/${route}?req=${requestId}`;
+        spawnError = fire(exe, uri);
     }
-
-    // The scheme has to match the build that will handle the URI, or it is
-    // routed to a different editor - or nowhere at all.
-    const scheme = companion.uriScheme || (/insiders/i.test(exe) ? "vscode-insiders" : "vscode");
-    const uri = `${scheme}://${EXTENSION_ID}/${route}?req=${requestId}`;
-
-    const spawnError = fire(exe, uri);
     if (spawnError) {
         return { ok: false, reason: "error", error: `could not reach the editor: ${spawnError}` };
     }
@@ -207,6 +355,7 @@ export async function callCompanion(route, payload = null, options = {}) {
     const ack = await waitForAck(requestId, timeoutMs);
     if (!ack) {
         rmSync(join(REQ_DIR, `${requestId}.json`), { force: true });
+        if (inboxFile) rmSync(inboxFile, { force: true });
         return {
             ok: false,
             reason: "timeout",
@@ -215,6 +364,20 @@ export async function callCompanion(route, payload = null, options = {}) {
     }
 
     return ack.ok ? ack : { ...ack, reason: ack.reason || "refused" };
+}
+
+function writeInbox(windowId, request) {
+    try {
+        const dir = join(INBOX_ROOT, windowId);
+        mkdirSync(dir, { recursive: true, mode: 0o700 });
+        const file = join(dir, `${request.requestId}.json`);
+        const tmp = `${file}.tmp`;
+        writeFileSync(tmp, JSON.stringify(request), { encoding: "utf8", mode: 0o600 });
+        renameSync(tmp, file);
+        return { error: null, file };
+    } catch (err) {
+        return { error: err.message, file: null };
+    }
 }
 
 /**
@@ -285,7 +448,19 @@ function sleep(ms) {
 /** Human-readable reason a companion call failed, for logging. */
 export function explain(result) {
     if (result.ok) return "";
-    if (result.reason === "absent") return explainAbsent();
+    if (result.reason === "ambiguous") {
+        return (
+            `${result.error}. Call porthole_windows and ask the user which window they mean; ` +
+            "do not guess."
+        );
+    }
+    if (result.reason === "unknown-window") return result.error;
+    if (result.reason === "absent") {
+        if (/bound to this Copilot session/i.test(result.error || "")) {
+            return `${result.error}. Run /cops or ask to open this session in a new window.`;
+        }
+        return explainAbsent();
+    }
     if (result.reason === "timeout") {
         // Deliberately does not delete the presence file it fired at. Deleting
         // it looked like tidy self-healing and was a trap: the request path

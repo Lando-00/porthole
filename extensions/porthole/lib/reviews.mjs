@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { callCompanion, explain } from "./companion.mjs";
 import { ensureCompanion } from "./ensure.mjs";
 import { copilotHome } from "./config.mjs";
+import { companionOptions } from "./target.mjs";
 
 const SCHEMA = 1;
 const SLUG_PATTERN = /^[\w-]{1,64}$/;
@@ -134,7 +135,7 @@ export async function review(args = {}, getSession = null) {
         const result = await callCompanion(
             "review-save",
             { slug: args.slug, title: args.title },
-            { contextPath: root },
+            companionOptions(root, getSession),
         );
         if (!result.ok) return `porthole: ${explain(result)}`;
         return (
@@ -157,7 +158,7 @@ export async function review(args = {}, getSession = null) {
         const result = await callCompanion(
             "review-load",
             { slug: args.slug, file: args.file },
-            { contextPath: root },
+            companionOptions(root, getSession),
         );
         if (result.ok) {
             return describeFindings(result.result.review, result.result.resolution);

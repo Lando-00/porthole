@@ -4,7 +4,7 @@
   "//editor": "insiders | stable | cursor | windsurf | auto | an absolute path to a launcher",
   "editor": "insiders",
 
-  "//preferConnectedIde": "Drive the editor window Copilot CLI is already connected to instead of opening another one. Ignored when 'editor' is set to anything but auto.",
+  "//preferConnectedIde": "Prefer the editor build Copilot CLI is connected to when choosing what to launch. Window reuse is session-aware and is not controlled by this setting. Ignored when 'editor' is set to anything but auto.",
   "preferConnectedIde": true,
 
   "//workspaceDir": "Where generated .code-workspace and diff files go. null uses the temp folder.",

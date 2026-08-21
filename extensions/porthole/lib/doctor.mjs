@@ -16,6 +16,7 @@ import { connectedIdes, resolveEditorExe, resolveEditorTarget, whichEditor } fro
 import * as endpoint from "./endpoint.mjs";
 import { findEndpoints, portholeHome } from "./endpoint.mjs";
 import { currentBranch, dirtyCount, isGitRepo, projectRoot } from "./git.mjs";
+import { companionOptions } from "./target.mjs";
 
 const MARK = { ok: "ok  ", warn: "warn", fail: "fail", info: "    " };
 
@@ -55,9 +56,9 @@ export async function doctor(session, ctx) {
     configSection(report);
     editors(report);
     ides(report, cwd);
-    await companion(report, cwd);
+    await companion(report, cwd, session);
     reverseChannel(report, session, ctx);
-    await toursSection(report, cwd);
+    await toursSection(report, cwd, session);
     sessionSection(report, session, ctx);
     gitSection(report, cwd);
     verdict(report);
@@ -180,7 +181,7 @@ function ides(report, cwd) {
         `chosen: ${target.command}`,
     );
     report.detail(
-        `because: ${describeReason(target)}${target.connected ? " (reusing that window)" : ""}`,
+        `because: ${describeReason(target)}${target.connected ? " (using that editor build)" : ""}`,
     );
 }
 
@@ -197,7 +198,7 @@ function describeReason(target) {
     }
 }
 
-async function companion(report, cwd) {
+async function companion(report, cwd, session) {
     report.section("companion extension");
     const companions = findCompanions();
 
@@ -219,6 +220,8 @@ async function companion(report, cwd) {
 
     for (const c of companions) {
         report.add("ok", `v${c.version} in ${c.appName} (pid ${c.pid}, ${c.uriScheme})`);
+        report.detail(`window ${c.windowId || "legacy companion - no exact window id"}`);
+        report.detail(`session ${c.sessionId || "unbound"}`);
         report.detail(`session.db readable in-process: ${c.hostSqlite ? "yes" : "no, uses node"}`);
         for (const folder of c.workspaceFolders || []) report.detail(folder);
     }
@@ -226,7 +229,7 @@ async function companion(report, cwd) {
     // A heartbeat only proves the window started. This proves a URI arrives,
     // which is the part that actually breaks.
     const started = Date.now();
-    const ping = await callCompanion("ping", null, { contextPath: cwd });
+    const ping = await callCompanion("ping", null, companionOptions(cwd, session));
     const elapsed = Date.now() - started;
 
     if (ping.ok) {
@@ -304,10 +307,10 @@ function reverseChannel(report, session, ctx) {
  * feature is most likely to hit in practice: the explanation is still there,
  * still opens, and quietly describes code that has since changed.
  */
-async function toursSection(report, cwd) {
+async function toursSection(report, cwd, session) {
     report.section("tours");
 
-    const result = await callCompanion("tour-list", {}, { contextPath: cwd });
+    const result = await callCompanion("tour-list", {}, companionOptions(cwd, session));
     if (!result.ok) {
         report.add("warn", `could not read the tour library: ${explain(result)}`);
         return;

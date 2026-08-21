@@ -1,9 +1,9 @@
 // Choosing and driving an editor.
 //
-// Two things matter here. First, commands should land in the window the user is
-// already looking at rather than opening another one - the CLI writes a lock
-// file for each connected IDE, which is how that window is found. Second,
-// launching on Windows is full of traps, so it happens in exactly one place.
+// Two things matter here. First, IDE locks identify which editor build the user
+// is connected to. Exact window routing belongs to the companion transport;
+// `code --reuse-window` cannot target a PID. Second, launching on Windows is
+// full of traps, so it happens in exactly one place.
 
 import { spawn, execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -146,7 +146,7 @@ function fromPreference(preference) {
  * Precedence, highest first:
  *   1. PORTHOLE_EDITOR      - a deliberate one-off override
  *   2. `editor` in the config - the user's standing preference
- *   3. a connected IDE window - land where they are already looking
+ *   3. the build used by a connected IDE window
  *   4. Insiders, then stable
  *
  * The preference beats the connected window on purpose: someone who has written

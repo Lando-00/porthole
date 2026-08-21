@@ -56,11 +56,159 @@ function sessionFolderFor(sessionId) {
  * so it falls back to the SDK's own `session.workspacePath`, whose basename is
  * the id - otherwise the tool could never find the session folder.
  */
-function resolveSessionId(session, ctx) {
+export function resolveSessionId(session, ctx) {
     if (ctx?.sessionId) return ctx.sessionId;
     const dir = session?.workspacePath;
     if (typeof dir === "string" && dir) return basename(dir);
     return null;
+}
+
+export function resolveSessionPath(session, ctx) {
+    if (typeof session?.workspacePath === "string" && session.workspacePath) {
+        return session.workspacePath;
+    }
+    return sessionFolderFor(resolveSessionId(session, ctx));
+}
+
+function windowSummary(companion) {
+    return {
+        windowId: companion.windowId || null,
+        pid: companion.pid,
+        appName: companion.appName || companion.ideName || "VS Code",
+        sessionId: companion.sessionId || null,
+        sessionFolder: companion.sessionFolder || null,
+        sessionLabel: companion.sessionLabel || null,
+        repository: companion.repository || null,
+        branch: companion.branch || null,
+        connectionHealth: companion.connectionHealth || null,
+        workspaceFolders: companion.workspaceFolders || [],
+    };
+}
+
+function companionHasSession(companion, sessionId, sessionFolder) {
+    if (sessionId && companion.sessionId === sessionId) return true;
+    if (
+        sessionFolder &&
+        companion.sessionFolder &&
+        String(companion.sessionFolder).toLowerCase() === String(sessionFolder).toLowerCase()
+    ) {
+        return true;
+    }
+
+    return Boolean(
+        sessionFolder &&
+            (companion.workspaceFolders || []).some(
+                (folder) =>
+                    String(folder || "").replace(/[\\/]+$/, "").toLowerCase() ===
+                    String(sessionFolder).replace(/[\\/]+$/, "").toLowerCase(),
+            ),
+    );
+}
+
+function isBoundToDifferentSession(companion, sessionId, sessionFolder) {
+    if (!companion.sessionId && !companion.sessionFolder) return false;
+    return !companionHasSession(companion, sessionId, sessionFolder);
+}
+
+/**
+ * Pure window policy. It never reads the filesystem or launches an editor.
+ */
+export function chooseWindowAction({
+    mode = "auto",
+    windowId = null,
+    sessionId = null,
+    sessionFolder = null,
+    companions = [],
+} = {}) {
+    const requested = ["auto", "new", "reuse"].includes(mode) ? mode : null;
+    const candidates = companions.map(windowSummary);
+    if (!requested) {
+        return { ok: false, action: "refuse", error: `unknown window mode '${mode}'`, candidates };
+    }
+
+    if (requested === "new") return { ok: true, action: "new-workspace", candidates: [] };
+
+    const exact = companions.filter((c) => companionHasSession(c, sessionId, sessionFolder));
+    if (requested === "auto") {
+        if (exact.length === 1) {
+            return {
+                ok: true,
+                action: "existing-window",
+                companion: windowSummary(exact[0]),
+                candidates: [],
+            };
+        }
+        if (exact.length > 1) {
+            return {
+                ok: false,
+                action: "refuse",
+                error: "more than one window is bound to this Copilot session",
+                candidates: exact.map(windowSummary),
+            };
+        }
+        return { ok: true, action: "new-workspace", candidates: [] };
+    }
+
+    if (windowId) {
+        const selected = companions.find((c) => c.windowId === windowId);
+        if (!selected) {
+            return {
+                ok: false,
+                action: "refuse",
+                error: `window '${windowId}' is no longer available`,
+                candidates,
+            };
+        }
+        if (isBoundToDifferentSession(selected, sessionId, sessionFolder)) {
+            return {
+                ok: false,
+                action: "refuse",
+                error:
+                    `window '${windowId}' is already bound to Copilot session ` +
+                    `'${selected.sessionId || "unknown"}'; reusing it would mix two sessions`,
+                candidates: [windowSummary(selected)],
+            };
+        }
+        return {
+                  ok: true,
+                  action: "reuse-window",
+                  companion: windowSummary(selected),
+                  candidates: [],
+              };
+    }
+
+    if (companions.length === 1) {
+        if (isBoundToDifferentSession(companions[0], sessionId, sessionFolder)) {
+            return {
+                ok: false,
+                action: "refuse",
+                error:
+                    "the only available window is already bound to another Copilot session; " +
+                    "open a new window instead",
+                candidates: companions.map(windowSummary),
+            };
+        }
+        return {
+            ok: true,
+            action: "reuse-window",
+            companion: windowSummary(companions[0]),
+            candidates: [],
+        };
+    }
+    if (companions.length === 0) {
+        return {
+            ok: false,
+            action: "refuse",
+            error: "there is no running porthole window to reuse",
+            candidates: [],
+        };
+    }
+    return {
+        ok: false,
+        action: "refuse",
+        error: "more than one VS Code window is available; choose one before reusing",
+        candidates,
+    };
 }
 
 function portholeTempDir(leaf, { create = true } = {}) {
@@ -106,6 +254,12 @@ function planFileFor(sessionFolder) {
     }
 }
 
+export function workspaceLaunchArgs(workspaceFile, planFile = null) {
+    return planFile
+        ? ["--new-window", workspaceFile, "--goto", `${planFile}:1`]
+        : ["--new-window", workspaceFile];
+}
+
 /**
  * Works out exactly what opening the session would do.
  *
@@ -114,6 +268,7 @@ function planFileFor(sessionFolder) {
  */
 export function planOpenSession(session, ctx, options = {}) {
     const revealPlanRequested = options.revealPlan !== false;
+    const mode = options.mode || "auto";
 
     const cwd = process.cwd();
     const root = projectRoot(cwd);
@@ -121,9 +276,16 @@ export function planOpenSession(session, ctx, options = {}) {
     const sessionId = resolveSessionId(session, ctx);
     const sessionFolder = sessionFolderFor(sessionId);
     const planFile = planFileFor(sessionFolder);
+    const windowChoice = chooseWindowAction({
+        mode,
+        windowId: options.windowId || null,
+        sessionId,
+        sessionFolder,
+        companions: findCompanions(),
+    });
 
     const target = resolveEditorTarget(root);
-    if (!target) {
+    if (!target && windowChoice.action === "new-workspace") {
         return {
             ok: false,
             error:
@@ -139,8 +301,8 @@ export function planOpenSession(session, ctx, options = {}) {
 
     const revealPlan = revealPlanRequested && Boolean(planFile && planFile.exists);
     const plan = {
-        ok: true,
-        error: null,
+        ok: windowChoice.ok,
+        error: windowChoice.error || null,
         cwd,
         projectRoot: root,
         projectName,
@@ -150,40 +312,54 @@ export function planOpenSession(session, ctx, options = {}) {
         revealPlanRequested,
         revealPlan,
         editor: {
-            command: target.command,
-            connected: Boolean(target.connected),
-            ideName: target.ideName,
-            reason: target.reason,
-            because: describeReason(target),
+            command: target?.command || null,
+            connected: Boolean(windowChoice.companion),
+            ideName: target?.ideName || windowChoice.companion?.appName || null,
+            reason: target?.reason || "companion",
+            because: target ? describeReason(target) : "the selected companion is already running",
         },
+        mode,
+        companion: windowChoice.companion || null,
+        candidates: windowChoice.candidates || [],
         steps: [],
     };
 
-    if (target.connected) {
-        // Reuse the window the user is already in rather than opening a second
-        // one on a generated workspace.
+    if (!windowChoice.ok) {
+        plan.action = "refuse";
+        plan.workspaceFile = null;
+        plan.addFolder = null;
+        plan.folders = null;
+        return plan;
+    }
+
+    if (windowChoice.action === "existing-window") {
+        plan.action = "existing-window";
+        plan.workspaceFile = null;
+        plan.addFolder = null;
+        plan.folders = null;
+        if (revealPlan) {
+            plan.steps.push({
+                what: "reveal plan.md in the window already bound to this Copilot session",
+                via: `companion window ${windowChoice.companion.windowId}`,
+            });
+        }
+        return plan;
+    }
+
+    if (windowChoice.action === "reuse-window") {
         plan.action = "reuse-window";
         plan.workspaceFile = null;
-        plan.addFolder = sessionFolder || root;
+        plan.addFolder = sessionFolder;
         plan.folders = null;
         plan.steps.push({
-            what: sessionFolder
-                ? `add the session folder to the connected ${target.ideName} window`
-                : `add the project to the connected ${target.ideName} window (no session folder on disk yet)`,
-            command: target.command,
-            args: ["--reuse-window", "--add", plan.addFolder],
+            what: `add the project and session folder to window ${windowChoice.companion.windowId}`,
+            via: "the addressed porthole companion",
         });
 
         if (revealPlan) {
-            // --add swallows --goto in the same invocation: the folder is added
-            // and the file silently never opens. Verified on Insiders 1.132.
-            // So this is a separate step, preferring the companion because it
-            // acknowledges the request and targets the right window.
             plan.steps.push({
                 what: "reveal plan.md",
-                via: "companion, falling back to a second --goto launch",
-                command: target.command,
-                args: ["--reuse-window", "--goto", `${planFile.path}:1`],
+                via: `companion window ${windowChoice.companion.windowId}`,
             });
         }
         return plan;
@@ -220,9 +396,7 @@ export function planOpenSession(session, ctx, options = {}) {
     plan.workspaceExists = existsSync(plan.workspaceFile);
 
     // A workspace argument and --goto DO work together, unlike --add.
-    const args = revealPlan
-        ? [plan.workspaceFile, "--goto", `${planFile.path}:1`]
-        : [plan.workspaceFile];
+    const args = workspaceLaunchArgs(plan.workspaceFile, revealPlan ? planFile.path : null);
 
     plan.steps.push({
         what: `write ${plan.workspaceExists ? "and overwrite" : ""} the workspace file`.replace(
@@ -258,6 +432,13 @@ export function describePlan(plan) {
 
     if (!plan.ok) {
         lines.push(`  PROBLEM   ${plan.error}`, "");
+        for (const candidate of plan.candidates || []) {
+            lines.push(
+                `  candidate ${candidate.windowId || "legacy"}  ${candidate.appName}` +
+                    `  session ${candidate.sessionId || "unbound"}`,
+            );
+            for (const folder of candidate.workspaceFolders || []) lines.push(`            ${folder}`);
+        }
     }
 
     lines.push(`  project   ${plan.projectRoot}`);
@@ -281,12 +462,14 @@ export function describePlan(plan) {
     if (plan.ok) {
         lines.push(
             "",
-            `  editor    ${plan.editor.command}`,
+            `  editor    ${plan.editor.command || plan.companion?.appName || "running companion"}`,
             `  because   ${plan.editor.because}`,
             `  window    ${
-                plan.editor.connected
-                    ? `reuse the connected ${plan.editor.ideName} window`
-                    : "open a new window on a generated workspace"
+                plan.action === "existing-window"
+                    ? `use this session's existing window (${plan.companion.windowId})`
+                    : plan.action === "reuse-window"
+                      ? `reuse selected window ${plan.companion.windowId}`
+                      : "open a new window on a generated workspace"
             }`,
         );
 
@@ -339,16 +522,15 @@ async function revealPlanFile(session, plan) {
     const result = await callCompanion(
         "reveal",
         { file: plan.planFile.path, startLine: 1, endLine: 1 },
-        { contextPath: plan.projectRoot },
+        {
+            contextPath: plan.projectRoot,
+            sessionPath: plan.sessionFolder,
+            windowId: plan.companion?.windowId,
+        },
     );
     if (result.ok) return "revealed plan.md";
 
-    launchEditor(session, plan.editor.command, [
-        "--reuse-window",
-        "--goto",
-        `${plan.planFile.path}:1`,
-    ]);
-    return "opened plan.md";
+    return `could not reveal plan.md - ${result.error || result.reason}`;
 }
 
 /**
@@ -363,18 +545,36 @@ export async function openSession(session, ctx, options = {}) {
     if (options.dryRun) return describePlan(plan);
     if (!plan.ok) return `porthole: ${plan.error}`;
 
+    if (plan.action === "existing-window") {
+        let planNote = "";
+        if (plan.revealPlan) planNote = `\n  ${await revealPlanFile(session, plan)}`;
+        return (
+            "porthole: this Copilot session already has its own VS Code window.\n" +
+            `  project: ${plan.projectRoot}\n  session: ${plan.sessionFolder}${planNote}`
+        );
+    }
+
     if (plan.action === "reuse-window") {
-        launchEditor(session, plan.editor.command, ["--reuse-window", "--add", plan.addFolder]);
+        const folders = [plan.projectRoot, plan.sessionFolder].filter(Boolean);
+        const added = await callCompanion(
+            "workspace-add",
+            { folders },
+            { windowId: plan.companion.windowId, contextPath: plan.projectRoot },
+        );
+        if (!added.ok) {
+            return `porthole: could not reuse the selected window - ${added.error || added.reason}`;
+        }
 
         let planNote = "";
         if (plan.revealPlan) {
             planNote = `\n  ${await revealPlanFile(session, plan)}`;
         }
 
-        return plan.sessionFolder
-            ? `porthole: added the session folder to the connected ${plan.editor.ideName} window.\n` +
-                  `  project: ${plan.projectRoot}\n  session: ${plan.sessionFolder}${planNote}`
-            : `porthole: no session folder on disk yet; added the project to the connected ${plan.editor.ideName} window.`;
+        return (
+            `porthole: reused the selected ${plan.companion.appName} window.\n` +
+            `  project: ${plan.projectRoot}\n` +
+            `  session: ${plan.sessionFolder || "no session folder on disk yet"}${planNote}`
+        );
     }
 
     const workspace = {
@@ -402,7 +602,8 @@ export async function openSession(session, ctx, options = {}) {
     const planNote = plan.revealPlan ? "\n  opened plan.md" : "";
     // Callers that wait for the companion themselves pass false, so the two
     // waits do not stack.
-    const trustNote = options.notifyIfSilent === false ? "" : await noteIfNothingCameUp(plan);
+    const trustNote =
+        options.notifyIfSilent === false ? "" : await noteIfNothingCameUp(plan);
 
     return plan.sessionFolder
         ? `porthole: opened '${plan.projectName}' + the Copilot session folder in one workspace.\n` +
@@ -428,7 +629,13 @@ async function noteIfNothingCameUp(plan) {
     // so long that /cops feels slow when something is genuinely wrong.
     for (let i = 0; i < 12; i += 1) {
         await new Promise((r) => setTimeout(r, 1000));
-        if (findCompanions().length > 0) return "";
+        if (
+            findCompanions().some((companion) =>
+                companionHasSession(companion, plan.sessionId, plan.sessionFolder),
+            )
+        ) {
+            return "";
+        }
     }
 
     const parent = plan.sessionFolder ? dirname(plan.sessionFolder) : null;
@@ -445,13 +652,55 @@ async function noteIfNothingCameUp(plan) {
 // Tool
 // ---------------------------------------------------------------------------
 
+export function windows() {
+    const companions = findCompanions().map(windowSummary);
+    if (companions.length === 0) return "porthole: no companion windows are running.";
+
+    const lines = [`porthole: ${companions.length} companion window(s).`];
+    for (const window of companions) {
+        const folders = window.workspaceFolders.length
+            ? window.workspaceFolders.join(" | ")
+            : "(no workspace folders)";
+        lines.push(
+            `  ${window.windowId || "legacy"}  ${window.appName}  ` +
+                `${window.sessionLabel || `session ${window.sessionId || "unbound"}`}` +
+                `${window.repository ? `  ${window.repository}${window.branch ? `@${window.branch}` : ""}` : ""}` +
+                `${window.connectionHealth ? `  ${window.connectionHealth}` : ""}`,
+            `      ${folders}`,
+        );
+    }
+    return lines.join("\n");
+}
+
+export async function focusWindow(options = {}, session = null) {
+    const sessionPath = resolveSessionPath(session, null);
+    const result = await callCompanion("focus", null, {
+        contextPath: process.cwd(),
+        sessionPath,
+        windowId: options.windowId || null,
+    });
+    if (!result.ok) {
+        return `porthole: could not focus the window - ${result.error || result.reason}`;
+    }
+    return result.focused
+        ? "porthole: focused the exact VS Code window for this Copilot session."
+        : "porthole: requested attention from the exact VS Code window for this Copilot session.";
+}
+
 export function tools(getSession) {
     return [
         {
             name: "porthole_open_session",
             description:
                 "Open the user's project and their current Copilot session folder together in " +
-                "one VS Code workspace - the same thing the /cops command does. " +
+                "one VS Code workspace. Default mode 'auto' does the safe /cops behavior: reuse " +
+                "only a window already bound to this exact Copilot session, otherwise open a " +
+                "new window. Use mode 'new' when the user asks for separation. Use mode 'reuse' " +
+                "only when the user explicitly asks to use an unbound existing window. A window " +
+                "already bound to another Copilot session is refused, because one companion " +
+                "window cannot safely represent two sessions. If several windows exist, call " +
+                "porthole_windows, ask the user which one " +
+                "they mean, then pass its windowId; never guess. " +
                 "ONLY call this when the user has explicitly asked you to open, show or set up " +
                 "their session, workspace or editor. NEVER call it proactively, speculatively, " +
                 "or because it might be convenient: it takes over the user's screen by opening " +
@@ -476,6 +725,20 @@ export function tools(getSession) {
                             "Open the session's plan.md as the active editor when one exists. " +
                             "Default true. Set false if the user only wants the folders open.",
                     },
+                    mode: {
+                        type: "string",
+                        enum: ["auto", "new", "reuse"],
+                        description:
+                            "'auto' (default) reuses only this session's existing window, else " +
+                            "opens a new one. 'new' forces a separate window. 'reuse' adds this " +
+                            "project/session to one explicitly selected unbound window.",
+                    },
+                    windowId: {
+                        type: "string",
+                        description:
+                            "Exact id from porthole_windows. Use with mode 'reuse' when more than " +
+                            "one window exists. Never invent or guess it.",
+                    },
                 },
             },
             // No ctx: a tool call gets its session id from session.workspacePath.
@@ -483,7 +746,41 @@ export function tools(getSession) {
                 openSession(getSession(), null, {
                     dryRun: Boolean(args?.dryRun),
                     revealPlan: args?.revealPlan !== false,
+                    mode: args?.mode || "auto",
+                    windowId: args?.windowId || null,
                 }),
+        },
+        {
+            name: "porthole_windows",
+            description:
+                "List the live VS Code windows running the porthole companion, including each " +
+                "window's stable id, workspace folders, and bound Copilot session. Call this " +
+                "when the user asks to reuse an existing window and more than one might match. " +
+                "Show the human-readable choices and ask the user which one they mean; then pass " +
+                "the selected windowId to porthole_open_session. This tool is read-only.",
+            parameters: { type: "object", properties: {} },
+            handler: async () => windows(),
+        },
+        {
+            name: "porthole_focus_window",
+            description:
+                "Focus the exact VS Code window bound to the current Copilot session without " +
+                "opening, reusing, or modifying any workspace. If the user selected a window " +
+                "from porthole_windows, pass its windowId. Never guess between multiple windows. " +
+                "ONLY call this when the user explicitly asks to focus, bring forward, or switch " +
+                "to a VS Code window because it deliberately changes their foreground context.",
+            parameters: {
+                type: "object",
+                properties: {
+                    windowId: {
+                        type: "string",
+                        description:
+                            "Optional exact id from porthole_windows. Omit it to target the " +
+                            "window bound to the current Copilot session.",
+                    },
+                },
+            },
+            handler: async (args) => focusWindow(args, getSession()),
         },
     ];
 }
