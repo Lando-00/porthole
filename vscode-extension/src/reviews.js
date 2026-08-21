@@ -201,6 +201,7 @@ function list(payload = {}) {
 
 function discover(payload = {}) {
     const current = findWorkspaceSession();
+    if (!current) return { ok: false, error: "no Copilot session is bound to this window" };
     const limit = Math.min(200, Math.max(1, Number.parseInt(payload.limit, 10) || 50));
     const reviews = scan({ repo: payload.repo })
         .filter((review) => review.sessionId !== current?.id)
@@ -257,6 +258,7 @@ async function importReview(payload = {}) {
         (review) => review.slug === preferred,
     );
     let slug = preferred;
+    let replacing = false;
     if (existing && payload.replace === true) {
         const answer = await vscode.window.showWarningMessage(
             `Replace the Saved Review "${preferred}" in this Copilot session?`,
@@ -271,6 +273,7 @@ async function importReview(payload = {}) {
                 suggestedSlug: availableSlug(session.id, preferred),
             };
         }
+        replacing = true;
     } else {
         slug = availableSlug(session.id, preferred);
     }
@@ -290,14 +293,34 @@ async function importReview(payload = {}) {
         },
         findings: (source.findings || []).map((finding) => ({ ...finding })),
     };
-    const file = path.join(session.dir, "porthole", "reviews", `${slug}.json`);
-    try {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        const tmp = `${file}.tmp`;
-        fs.writeFileSync(tmp, JSON.stringify(record, null, 2), "utf8");
-        fs.renameSync(tmp, file);
-    } catch (err) {
-        return { ok: false, error: `could not import the Saved Review: ${err.message}` };
+    const dir = path.join(session.dir, "porthole", "reviews");
+    fs.mkdirSync(dir, { recursive: true });
+    let file;
+    for (let attempt = 0; attempt < 1000; attempt += 1) {
+        file = path.join(dir, `${slug}.json`);
+        record.slug = slug;
+        try {
+            if (replacing) {
+                const tmp = `${file}.tmp`;
+                fs.writeFileSync(tmp, JSON.stringify(record, null, 2), "utf8");
+                fs.renameSync(tmp, file);
+            } else {
+                fs.writeFileSync(file, JSON.stringify(record, null, 2), {
+                    encoding: "utf8",
+                    flag: "wx",
+                });
+            }
+            break;
+        } catch (err) {
+            if (!replacing && err.code === "EEXIST") {
+                slug = availableSlug(session.id, preferred);
+                continue;
+            }
+            return { ok: false, error: `could not import the Saved Review: ${err.message}` };
+        }
+    }
+    if (!file || !fs.existsSync(file)) {
+        return { ok: false, error: "could not find a free Saved Review slug" };
     }
     return { ok: true, result: { slug, file, provenance: record.provenance } };
 }

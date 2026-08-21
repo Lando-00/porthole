@@ -39,12 +39,13 @@ function readReview(file) {
  * point is that a later session can pick up an earlier one's findings.
  */
 export function listReviews({ repo = null, limit = 50, currentSessionPath = null } = {}) {
+    if (!currentSessionPath) return [];
     const root = sessionRoot();
     let sessions = [];
     try {
-        const currentId = currentSessionPath ? basename(currentSessionPath) : null;
+        const currentId = basename(currentSessionPath);
         sessions = readdirSync(root, { withFileTypes: true }).filter(
-            (entry) => !currentId || entry.name === currentId,
+            (entry) => entry.name === currentId,
         );
     } catch {
         return [];
