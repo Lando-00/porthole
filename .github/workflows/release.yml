@@ -20,6 +20,9 @@ jobs:
       - name: Validate the plugin
         run: node tests/validate.mjs
 
+      - name: Run the complete test suite
+        run: node --test tests/*.test.mjs tests/*.test.cjs
+
       # A tag that disagrees with the manifests would publish a release nobody
       # can reproduce, so refuse rather than guess.
       - name: Check the tag matches plugin.json

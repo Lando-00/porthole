@@ -6,8 +6,11 @@ on:
   pull_request:
 
 jobs:
-  validate:
-    runs-on: ubuntu-latest
+  test:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -20,6 +23,19 @@ jobs:
       # plugin only ever loads inside the CLI.
       - name: Validate the plugin
         run: node tests/validate.mjs
+
+      - name: Run the complete test suite
+        run: node --test tests/*.test.mjs tests/*.test.cjs
+
+  package:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       # Packaging is the only real build step, and it catches things the
       # validator cannot see, such as a file excluded by .vscodeignore that the

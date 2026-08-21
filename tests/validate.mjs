@@ -101,6 +101,29 @@ check("the companion manifest is valid", () => {
     return `v${pkg.version}`;
 });
 
+check("CI and release workflows enforce the complete suite", () => {
+    const ci = readFileSync(join(ROOT, ".github/workflows/ci.yml"), "utf8");
+    const release = readFileSync(join(ROOT, ".github/workflows/release.yml"), "utf8");
+    const fullSuite = "node --test tests/*.test.mjs tests/*.test.cjs";
+
+    if (!ci.includes("windows-latest") || !ci.includes("ubuntu-latest")) {
+        throw new Error("CI must test both Windows and Linux");
+    }
+    if (!ci.includes(fullSuite)) throw new Error("CI does not run the full Node test suite");
+    if (!release.includes(fullSuite)) {
+        throw new Error("release tags do not run the full Node test suite");
+    }
+    const testAt = release.indexOf(fullSuite);
+    const publishAt = release.indexOf("softprops/action-gh-release");
+    if (testAt === -1 || publishAt === -1 || testAt > publishAt) {
+        throw new Error("release publication is not gated by the full test suite");
+    }
+    if (!/package:\s*\n\s+needs:\s+test/m.test(ci)) {
+        throw new Error("companion packaging must wait for the test matrix");
+    }
+    return "Windows + Linux, package and release gated";
+});
+
 check("contributed command ids are all implemented", () => {
     const pkg = readJson("vscode-extension/package.json");
     const declared = (pkg.contributes?.commands || []).map((c) => c.command);
