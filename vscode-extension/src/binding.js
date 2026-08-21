@@ -44,7 +44,23 @@ function createSessionBinding({ vscode, findWorkspaceSession, sessionLabel }) {
             return { ok: true, cleared: false, cancelled: true, sessionId: session.id };
         }
 
-        const changed = vscode.workspace.updateWorkspaceFolders(index, 1);
+        const currentSession = findWorkspaceSession();
+        const currentFolders = vscode.workspace.workspaceFolders || [];
+        const currentIndex = currentFolders.findIndex((folder) =>
+            samePath(folder.uri.fsPath, session.dir),
+        );
+        if (
+            !currentSession ||
+            currentSession.id !== session.id ||
+            !samePath(currentSession.dir, session.dir) ||
+            currentIndex < 0
+        ) {
+            const error = "the Session Binding changed while confirmation was open";
+            vscode.window.showWarningMessage(`porthole: ${error}; nothing was cleared.`);
+            return { ok: false, cleared: false, error };
+        }
+
+        const changed = vscode.workspace.updateWorkspaceFolders(currentIndex, 1);
         if (!changed) {
             const error = "VS Code refused to remove the Copilot session folder";
             vscode.window.showWarningMessage(`porthole: ${error}.`);

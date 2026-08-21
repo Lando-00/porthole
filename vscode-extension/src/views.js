@@ -11,7 +11,7 @@
 
 const vscode = require("vscode");
 
-const { findSession, describeSession, readTodos } = require("./session");
+const { findWorkspaceSession, describeSession, readTodos } = require("./session");
 const tour = require("./tour");
 
 const STATUS_ORDER = ["in_progress", "pending", "blocked", "done"];
@@ -63,7 +63,7 @@ class SessionProvider {
     getChildren(parent) {
         if (parent) return [];
 
-        const session = findSession();
+        const session = findWorkspaceSession();
         if (!session) return [];
 
         const info = describeSession(session);
@@ -141,7 +141,7 @@ class TasksProvider {
         if (parent && parent.children) return parent.children;
         if (parent) return [];
 
-        const session = findSession();
+        const session = findWorkspaceSession();
         if (!session) return [];
 
         const info = describeSession(session);

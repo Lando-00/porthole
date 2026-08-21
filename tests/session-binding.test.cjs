@@ -6,7 +6,7 @@ const test = require("node:test");
 
 const { createSessionBinding } = require("../vscode-extension/src/binding");
 
-function fixture(answer = "Clear binding") {
+function fixture(answer = "Clear binding", whileConfirming = () => {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-binding-test-"));
     const session = {
         id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -36,6 +36,7 @@ function fixture(answer = "Clear binding") {
         window: {
             async showWarningMessage(message, options, ...actions) {
                 presentation.warnings.push({ message, options, actions });
+                whileConfirming({ folders, session });
                 return answer;
             },
             showInformationMessage(message) {
@@ -132,4 +133,21 @@ test("clearing an Unbound Window is an acknowledged no-op", async () => {
         reason: "unbound",
     });
     assert.match(information[0], /already unbound/);
+});
+
+test("Clear Session Binding re-resolves the exact folder after confirmation", async () => {
+    const setup = fixture("Clear binding", ({ folders }) => {
+        folders.unshift({ uri: { fsPath: "C:\\other" } });
+    });
+    try {
+        const result = await setup.controller.clear();
+
+        assert.equal(result.cleared, true);
+        assert.deepEqual(setup.folders.map((folder) => folder.uri.fsPath), [
+            "C:\\other",
+            "C:\\repo",
+        ]);
+    } finally {
+        fs.rmSync(setup.root, { recursive: true, force: true });
+    }
 });
