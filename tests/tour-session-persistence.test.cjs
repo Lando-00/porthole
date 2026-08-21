@@ -312,3 +312,23 @@ test("a forked Copilot session does not inherit its parent's Tour Library", () =
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+test("a foreign-owned record inside the session folder is never library authority", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const session = { id: "session-a", dir: path.join(root, "session-a"), source: "workspace" };
+    try {
+        const foreignFile = writeTour(session.dir, "misplaced-tour", "session-b");
+        const { tourstore, adopted } = loadTourstore({
+            session,
+            workspaceSession: session,
+        });
+
+        assert.deepEqual(tourstore.list({}).result.tours, []);
+        assert.equal((await tourstore.activateTour({ tourId: "misplaced-tour" })).ok, false);
+        assert.equal(tourstore.remove({ tourId: "misplaced-tour" }).ok, false);
+        assert.equal(fs.existsSync(foreignFile), true);
+        assert.deepEqual(adopted, []);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});

@@ -201,6 +201,7 @@ function scan({ repo, sessionId } = {}) {
             const file = path.join(dir, name);
             const record = read(file);
             if (!record) continue;
+            if (sessionId && record.sessionId !== sessionId) continue;
             if (wantRepo && String(record.repo || "").toLowerCase() !== wantRepo) continue;
             found.push({ ...record, file });
         }
