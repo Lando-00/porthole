@@ -9,7 +9,13 @@ const ROOT = path.resolve(__dirname, "..");
 const SRC = path.join(ROOT, "vscode-extension", "src");
 const TOURSTORE = path.join(SRC, "tourstore.js");
 
-function loadTourstore({ session, workspaceSession, loadedTour = null, warningAnswer }) {
+function loadTourstore({
+    session,
+    workspaceSession,
+    loadedTour = null,
+    warningAnswer,
+    adoptResult = true,
+}) {
     const adopted = [];
     const unloaded = [];
     const loadedTours = new Map(loadedTour ? [[loadedTour.tourId, loadedTour]] : []);
@@ -19,6 +25,7 @@ function loadTourstore({ session, workspaceSession, loadedTour = null, warningAn
         getLibrary: () => ({ tours: [...loadedTours.values()], activeTourId: null }),
         has: (tourId) => loadedTours.has(tourId),
         adopt(entry) {
+            if (!adoptResult) return false;
             adopted.push(entry);
             loadedTours.set(entry.tourId, entry);
             return true;
@@ -547,6 +554,33 @@ test("archiving a Tour cannot change a sibling session's same-ID Tour", () => {
         assert.equal(tourstore.setArchived({ tourId: "shared-tour", archived: true }).ok, true);
         assert.equal(Boolean(JSON.parse(fs.readFileSync(currentFile, "utf8")).archivedAt), true);
         assert.equal(fs.readFileSync(siblingFile, "utf8"), siblingBefore);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("unarchive rolls back when the Tour cannot return to the in-memory library", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const session = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
+    try {
+        const file = writeTour(session.dir, "auth-path", session.id, {
+            archivedAt: "2026-08-21T13:00:00.000Z",
+        });
+        const { tourstore } = loadTourstore({
+            session,
+            workspaceSession: session,
+            adoptResult: false,
+        });
+
+        const result = tourstore.setArchived({ tourId: "auth-path", archived: false });
+
+        assert.equal(result.ok, false);
+        assert.match(result.error, /library is full/);
+        assert.equal(
+            JSON.parse(fs.readFileSync(file, "utf8")).archivedAt,
+            "2026-08-21T13:00:00.000Z",
+        );
+        assert.deepEqual(tourstore.list({}).result.tours, []);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

@@ -382,6 +382,14 @@ function discover(payload = {}) {
     return { ok: true, result: { tours } };
 }
 
+function writeTourRecord(record) {
+    const stored = { ...record };
+    delete stored.file;
+    const tmp = `${record.file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(stored, null, 2), "utf8");
+    fs.renameSync(tmp, record.file);
+}
+
 function setArchived(payload = {}) {
     const session = findWorkspaceSession();
     const tourId = String(payload.tourId || "").trim();
@@ -400,16 +408,13 @@ function setArchived(payload = {}) {
     if (!record) return { ok: false, error: `no tour called '${tourId}' was found` };
 
     const archived = payload.archived !== false;
+    const previousArchivedAt = record.archivedAt;
     if (archived) record.archivedAt = payload.archivedAt || new Date().toISOString();
     else delete record.archivedAt;
     record.updatedAt = new Date().toISOString();
 
     try {
-        const stored = { ...record };
-        delete stored.file;
-        const tmp = `${record.file}.tmp`;
-        fs.writeFileSync(tmp, JSON.stringify(stored, null, 2), "utf8");
-        fs.renameSync(tmp, record.file);
+        writeTourRecord(record);
     } catch (err) {
         return {
             ok: false,
@@ -420,7 +425,22 @@ function setArchived(payload = {}) {
     if (archived) {
         tour.unload(tourId);
     } else if (!tour.has(tourId)) {
-        loadFromDisk(tourId, session.id);
+        const loaded = loadFromDisk(tourId, session.id);
+        if (!loaded.ok) {
+            record.archivedAt = previousArchivedAt;
+            record.updatedAt = new Date().toISOString();
+            try {
+                writeTourRecord(record);
+            } catch (err) {
+                return {
+                    ok: false,
+                    error:
+                        `${loaded.error}; additionally could not restore archive state: ` +
+                        err.message,
+                };
+            }
+            return loaded;
+        }
     }
     return {
         ok: true,
