@@ -38,6 +38,7 @@ const workspace = require("./src/workspace");
 const identity = require("./src/identity");
 const focus = require("./src/focus");
 const preview = require("./src/preview");
+const { createDispatcher } = require("./src/dispatcher");
 
 const VERSION = require("./package.json").version;
 
@@ -149,89 +150,25 @@ async function dispatch(route, payload) {
     }
 }
 
-function normaliseRoute(route) {
-    if (typeof route !== "string") return null;
-    return route.replace(/^\/+/, "").toLowerCase();
-}
-
 /**
- * Runs one request from either transport.
- *
- * URI handling and exact-window inbox handling deliberately enter here after
- * their transport-specific parsing. Keeping validation, dispatch, acking and
- * presence refresh in one place prevents a new route from working over one
- * channel and silently drifting over the other.
+ * URI and exact-window inbox transports enter the same dispatcher. The
+ * dispatcher owns route validation, error normalization and acknowledgement;
+ * this adapter adds the production presence and presentation effects.
  */
-async function executeRequest(route, payload, requestId = null, source = "uri") {
-    const normalised = normaliseRoute(route);
-    log.diag(`handle ${source} route=${normalised ?? "-"} req=${requestId || "-"}`);
-
-    // Route validity first: an unknown route with no payload should say so,
-    // rather than blaming the payload.
-    if (normalised === null || !KNOWN.has(normalised)) {
-        const result = {
-            ok: false,
-            error:
-                normalised === null
-                    ? "route was missing or invalid"
-                    : `unknown route '${normalised}'`,
-        };
-        transport.writeAck(requestId, {
-            ok: false,
-            error: result.error,
-        });
-        if (!requestId) {
-            vscode.window.showWarningMessage(
-                normalised === null
-                    ? `porthole: ${result.error}`
-                    : `porthole: unknown route '${normalised}'.`,
-            );
-        }
-        return result;
-    }
-
-    if (requestId && payload === null && !PAYLOAD_OPTIONAL.has(normalised)) {
-        const result = {
-            ok: false,
-            error: "payload file was missing or unreadable",
-        };
-        transport.writeAck(requestId, {
-            ok: false,
-            error: "payload file was missing or unreadable",
-        });
-        return result;
-    }
-
-    let result;
-    try {
-        result = await dispatch(normalised, payload || {});
-    } catch (err) {
-        result = { ok: false, error: err && err.message ? err.message : String(err) };
-    }
-    if (!result || typeof result !== "object") {
-        result = { ok: false, error: "route returned no result" };
-    }
-
-    log.diag(
-        `route=${normalised} ok=${result.ok}${result.error ? ` error=${result.error}` : ""}`,
-    );
-    transport.writeAck(requestId, result);
-    presence.write(vscode, VERSION);
-    identity.refresh();
-
-    // Republish presence on the way out. Not self-healing - a record that fails
-    // to answer is never deleted - but it keeps `updatedAt`, sessionId and
-    // sessionFolder fresh on a window that is actually in use. Readers sort
-    // newest-first, so a working window outranks one left over from a previous
-    // boot.
-
-    // Only surface a problem when nobody is waiting on an ack; otherwise the
-    // CLI reports it, and a modal-ish toast on top of that is just noise.
-    if (!result.ok && !requestId) {
-        vscode.window.showWarningMessage(`porthole: ${result.error}`);
-    }
-    return result;
-}
+const executeRequest = createDispatcher({
+    knownRoutes: KNOWN,
+    optionalPayloadRoutes: PAYLOAD_OPTIONAL,
+    dispatch,
+    writeAck: transport.writeAck,
+    diag: log.diag,
+    warn: (error) => vscode.window.showWarningMessage(`porthole: ${error}`),
+    onHandled: () => {
+        // A working reply keeps this window's presence current. Readers sort
+        // newest-first, so a live host outranks stale records.
+        presence.write(vscode, VERSION);
+        identity.refresh();
+    },
+});
 
 async function handleUri(uri) {
     const route = (uri.path || "").replace(/^\/+/, "").toLowerCase();

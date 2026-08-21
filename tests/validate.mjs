@@ -424,8 +424,15 @@ check("presence is republished after a request is handled", () => {
     // previous boot is outranked by the window doing the work, rather than
     // being picked ahead of it.
     const companion = readFileSync(join(ROOT, "vscode-extension/extension.js"), "utf8");
-    const afterAck = companion.slice(companion.indexOf("transport.writeAck(requestId, result)"));
-    if (!/presence\.write\(/.test(afterAck.slice(0, 800))) {
+    const dispatcher = readFileSync(
+        join(ROOT, "vscode-extension/src/dispatcher.js"),
+        "utf8",
+    );
+    if (!/writeAck\(requestId,\s*result\)/.test(dispatcher)) {
+        throw new Error("the shared dispatcher no longer acknowledges handled requests");
+    }
+    const adapter = companion.slice(companion.indexOf("const executeRequest = createDispatcher"));
+    if (!/onHandled:[\s\S]{0,500}presence\.write\(/.test(adapter.slice(0, 1200))) {
         throw new Error("extension.js no longer republishes presence after handling a request");
     }
 

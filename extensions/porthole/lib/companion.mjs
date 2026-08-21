@@ -35,12 +35,15 @@ import { connectedIdes, pathsRelated, resolveEditorExe, resolveEditorTarget, whi
 const ROOT = join(tmpdir(), "porthole");
 const REQ_DIR = join(ROOT, "req");
 const ACK_DIR = join(ROOT, "ack");
-const INBOX_ROOT = join(copilotHome(), "porthole", "inbox");
 const POLL_INTERVAL_MS = 10;
 const MAX_AGE_MS = 60 * 60 * 1000;
 const WINDOW_ID = /^[a-f0-9]{16}$/;
 
 const EXTENSION_ID = "lando-00.porthole-companion";
+
+function inboxRoot() {
+    return join(copilotHome(), "porthole", "inbox");
+}
 
 function ensureDirs() {
     mkdirSync(REQ_DIR, { recursive: true });
@@ -106,7 +109,7 @@ export function findCompanions() {
             if (err.code !== "EPERM") {
                 rmSync(file, { force: true }); // the window is gone
                 if (WINDOW_ID.test(String(info.windowId || ""))) {
-                    rmSync(join(INBOX_ROOT, info.windowId), { recursive: true, force: true });
+                    rmSync(join(inboxRoot(), info.windowId), { recursive: true, force: true });
                 }
                 continue;
             }
@@ -368,7 +371,7 @@ export async function callCompanion(route, payload = null, options = {}) {
 
 function writeInbox(windowId, request) {
     try {
-        const dir = join(INBOX_ROOT, windowId);
+        const dir = join(inboxRoot(), windowId);
         mkdirSync(dir, { recursive: true, mode: 0o700 });
         const file = join(dir, `${request.requestId}.json`);
         const tmp = `${file}.tmp`;

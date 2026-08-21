@@ -21,7 +21,7 @@ const ROUTE_RE = /^[A-Za-z0-9-]{0,64}$/;
 const MAX_REQUEST_BYTES = 6 * 1024 * 1024;
 const PROCESSING = ".processing";
 
-let active = null;
+const active = new Set();
 
 function copilotHome() {
     const configured = process.env.COPILOT_HOME;
@@ -214,7 +214,7 @@ async function scan(state) {
 }
 
 function schedule(state) {
-    if (active !== state || state.stopped) return;
+    if (!active.has(state) || state.stopped) return;
     state.scanRequested = true;
     if (state.scanning) return;
 
@@ -235,7 +235,6 @@ function schedule(state) {
 }
 
 function start(windowId, onRequest) {
-    if (active) return { dispose: stop };
     if (typeof onRequest !== "function") throw new TypeError("inbox handler is required");
 
     let paths;
@@ -254,7 +253,7 @@ function start(windowId, onRequest) {
         scanning: false,
         stopped: false,
     };
-    active = state;
+    active.add(state);
 
     try {
         // Watch first, then scan. That closes the race where a request arrives
@@ -279,11 +278,15 @@ function start(windowId, onRequest) {
 }
 
 function stop(expected = null) {
-    const state = expected || active;
-    if (!state || (active && state !== active)) return;
+    if (!expected) {
+        for (const state of [...active]) stop(state);
+        return;
+    }
+    const state = expected;
+    if (!active.has(state)) return;
 
     state.stopped = true;
-    if (active === state) active = null;
+    active.delete(state);
     try {
         if (state.watcher) state.watcher.close();
     } catch {
