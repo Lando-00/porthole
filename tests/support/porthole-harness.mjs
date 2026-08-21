@@ -155,7 +155,9 @@ export async function createPortholeHarness() {
             version: "test",
             protocolLevel,
             capabilities: advertisedCapabilities,
-            requiredCliCapabilities: [],
+            requiredCliCapabilities: [
+                ...companionCapabilities.REQUIRED_CLI_CAPABILITIES,
+            ],
             connectionHealth,
             compatibility,
             uriScheme: "vscode-insiders",

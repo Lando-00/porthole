@@ -50,7 +50,7 @@ test("window health distinguishes binding, connection, and both incompatibility 
     );
 });
 
-test("a CLI endpoint without a capability handshake remains a connected legacy endpoint", () => {
+test("a CLI endpoint without the required handshake is incompatible with a modern companion", () => {
     assert.deepEqual(
         connectionHealth({
             sessionId: "session-a",
@@ -58,6 +58,10 @@ test("a CLI endpoint without a capability handshake remains a connected legacy e
             companionCapabilities: ["route:ping"],
             requiredCliCapabilities: ["transport:addressed-inbox"],
         }),
-        { state: "connected", legacy: true },
+        {
+            state: "incompatible",
+            updateTarget: "plugin",
+            missingCapabilities: ["transport:addressed-inbox"],
+        },
     );
 });

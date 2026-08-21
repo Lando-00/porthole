@@ -352,7 +352,7 @@ answerable in about a millisecond instead of a full timeout.
     "route:tour",
     "route:focus"
   ],
-  "requiredCliCapabilities": [],
+  "requiredCliCapabilities": ["transport:addressed-inbox"],
   "uriScheme": "vscode-insiders",
   "appName": "Visual Studio Code - Insiders",
   "appHost": "desktop",          // "desktop" | "web" | remote host kind
@@ -408,7 +408,10 @@ companion instead of being sent as an unknown-route probe.
 CLI endpoint presence uses the same handshake shape: `protocolLevel`,
 `capabilities`, and `requiredCompanionCapabilities`. This lets the companion
 identify which half needs updating when a future release introduces a core
-requirement.
+requirement. Protocol level 1 makes `transport:addressed-inbox` a core
+requirement in both directions: a modern companion can therefore identify a
+legacy CLI plugin as incompatible, while the CLI's separately documented
+legacy-companion route baseline remains available for older companion builds.
 
 ### Window health
 

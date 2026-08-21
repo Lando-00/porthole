@@ -1,5 +1,6 @@
 const PROTOCOL_LEVEL = 1;
 const ADDRESSED_INBOX = "transport:addressed-inbox";
+const REQUIRED_CLI_CAPABILITIES = [ADDRESSED_INBOX];
 
 const ROUTES = [
     "",
@@ -34,7 +35,7 @@ function presenceContract(routes = ROUTES) {
             ADDRESSED_INBOX,
             ...new Set(routes.map(routeCapability)),
         ],
-        requiredCliCapabilities: [],
+        requiredCliCapabilities: [...REQUIRED_CLI_CAPABILITIES],
     };
 }
 
@@ -52,8 +53,16 @@ function connectionHealth({
     if (!endpoint) return { state: "disconnected" };
 
     // Absence means an older CLI extension, not a modern endpoint advertising
-    // no support. Legacy endpoints retain their guaranteed baseline.
+    // no support. A modern companion still needs its core transport, so it can
+    // identify the CLI plugin as the half that needs updating.
     if (!Array.isArray(endpoint.capabilities)) {
+        if (requiredCliCapabilities.length > 0) {
+            return {
+                state: "incompatible",
+                updateTarget: "plugin",
+                missingCapabilities: [...requiredCliCapabilities],
+            };
+        }
         return { state: "connected", legacy: true };
     }
 
@@ -84,6 +93,7 @@ function connectionHealth({
 module.exports = {
     PROTOCOL_LEVEL,
     ADDRESSED_INBOX,
+    REQUIRED_CLI_CAPABILITIES,
     ROUTES,
     routeCapability,
     presenceContract,

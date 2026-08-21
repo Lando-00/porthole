@@ -205,7 +205,9 @@ test("companion presence publishes its protocol and named route capabilities", a
             true,
         );
         assert.equal(window.presence.capabilities.includes("route:focus"), true);
-        assert.deepEqual(window.presence.requiredCliCapabilities, []);
+        assert.deepEqual(window.presence.requiredCliCapabilities, [
+            "transport:addressed-inbox",
+        ]);
     } finally {
         harness.dispose();
     }

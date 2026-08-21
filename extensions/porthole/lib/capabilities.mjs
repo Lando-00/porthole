@@ -19,7 +19,9 @@ const LEGACY_ROUTES = new Set([
 
 export const CLI_PROTOCOL_LEVEL = 1;
 export const CLI_CAPABILITIES = Object.freeze(["transport:addressed-inbox"]);
-export const REQUIRED_COMPANION_CAPABILITIES = Object.freeze([]);
+export const REQUIRED_COMPANION_CAPABILITIES = Object.freeze([
+    "transport:addressed-inbox",
+]);
 
 export function routeCapability(route) {
     return `route:${route || "reveal"}`;
