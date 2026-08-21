@@ -122,6 +122,9 @@ async function dispatch(route, payload) {
         case "tour-archive":
             return tourstore.setArchived(payload);
 
+        case "tour-legacy-cleanup":
+            return tourstore.cleanupLegacy(payload);
+
         case "review-save":
             return reviews.save(payload);
 

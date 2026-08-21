@@ -173,6 +173,7 @@ export async function discoverTours(args = {}, sessionSource = null) {
             repo: args.repo,
             sourceSessionId: args.sourceSessionId,
             limit: args.limit,
+            includeLegacyCurrent: true,
         },
         companionOptions(process.cwd(), sessionSource),
     );
@@ -184,13 +185,26 @@ export async function discoverTours(args = {}, sessionSource = null) {
     const lines = [`porthole: Saved Tour Discovery found ${list.length} Tour(s).`];
     for (const entry of list) {
         const stale = describeStaleness(entry.staleness);
+        const legacy =
+            entry.legacyStatus === "legacy-copy"
+                ? "LEGACY COPY"
+                : entry.legacyStatus === "uncertain"
+                  ? "UNCERTAIN"
+                  : null;
         lines.push(
             `  ${entry.sourceSessionId}/${entry.tourId} - "${entry.title}" ` +
                 `(${entry.steps} steps${entry.branch ? `, ${entry.branch}` : ""}` +
-                `${stale ? `, ${stale}` : ""})`,
+                `${stale ? `, ${stale}` : ""}${legacy ? `, ${legacy}` : ""})`,
             `      ${entry.repo || "(no repository)"} · created ${entry.createdAt || "unknown"}` +
                 ` · updated ${entry.updatedAt || "unknown"}`,
         );
+        if (entry.legacyEvidence) {
+            lines.push(
+                `      ${entry.legacyEvidence.reason}: ` +
+                    `${entry.legacyEvidence.recordCreatedAt || "unknown"} vs session ` +
+                    `${entry.legacyEvidence.claimedSessionCreatedAt || "unknown"}`,
+            );
+        }
     }
     return lines.join("\n");
 }
@@ -213,10 +227,31 @@ export async function importSavedTour(args = {}, sessionSource = null) {
             (result.suggestedTourId ? ` Suggested id: ${result.suggestedTourId}.` : "")
         );
     }
+
     const imported = result.result || result;
     return (
         `porthole: imported '${args.sourceTourId}' as '${imported.tourId}' into this ` +
         "Copilot session's Tour Library. The historical source remains unchanged."
+    );
+}
+
+export async function cleanupLegacyTour(args = {}, sessionSource = null) {
+    const result = await callCompanion(
+        "tour-legacy-cleanup",
+        {
+            sourceSessionId: args.sourceSessionId,
+            sourceTourId: args.sourceTourId,
+        },
+        companionOptions(process.cwd(), sessionSource),
+    );
+    if (!result.ok) return `porthole: ${explain(result)}`;
+    if (result.cancelled || result.deleted === false) {
+        return "porthole: legacy cleanup cancelled; no stored Tour was changed.";
+    }
+    const cleaned = result.result || result;
+    return (
+        `porthole: deleted the exact legacy copy '${cleaned.sourceTourId}' from ` +
+        `session '${cleaned.sourceSessionId}'. Other same-ID Tours were untouched.`
     );
 }
 
@@ -474,6 +509,23 @@ export function tools(getSession = null) {
                 required: ["sourceSessionId", "sourceTourId"],
             },
             handler: async (args) => importSavedTour(args, getSession),
+        },
+        {
+            name: "porthole_tour_cleanup_legacy",
+            description:
+                "Permanently delete one exact record that Saved Tour Discovery marked LEGACY " +
+                "COPY. VS Code shows the provenance evidence and requires confirmation. " +
+                "UNCERTAIN records are refused, and same-ID Tours elsewhere are never touched. " +
+                "Use only when the user explicitly asks to clean up that discovered copy.",
+            parameters: {
+                type: "object",
+                properties: {
+                    sourceSessionId: { type: "string", description: "Claimed session id from Saved Tour Discovery." },
+                    sourceTourId: { type: "string", description: "Exact LEGACY COPY Tour id from Saved Tour Discovery." },
+                },
+                required: ["sourceSessionId", "sourceTourId"],
+            },
+            handler: async (args) => cleanupLegacyTour(args, getSession),
         },
 
         {

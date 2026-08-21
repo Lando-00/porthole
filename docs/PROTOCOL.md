@@ -176,6 +176,7 @@ Set by the CLI so callers can react without parsing English:
 | `tour-discover` | `{ query, repo, sourceSessionId, limit }` | **yes** | 1.0.0 |
 | `tour-import` | `{ sourceSessionId, sourceTourId, targetTourId, replace }` | **yes** | 1.0.0 |
 | `tour-archive` | `{ tourId, archived }` | **yes** | 1.0.0 |
+| `tour-legacy-cleanup` | `{ sourceSessionId, sourceTourId }` | **yes** | 1.0.0 |
 | `review-save` | `{ slug, title }` | **yes** | 0.3.0 |
 | `review-list` | `{ limit, repo }` | **yes** | 0.3.0 |
 | `review-load` | `{ file }` or `{ slug }` | **yes** | 0.3.0 |
@@ -881,6 +882,20 @@ Close, Archive and Delete are separate operations: Close only stops the current
 Walkthrough, Archive durably declutters, and Delete permanently removes the
 exact owned file after confirmation. Same-ID Tours in sibling sessions are
 never candidates.
+
+### Legacy foreign copies
+
+Older builds could copy a foreign Tour into the current session folder. A
+record is a **legacy copy** only when its `createdAt` predates the creation time
+of the Copilot session named by its `sessionId`. Invalid or unavailable timing
+evidence is **uncertain**, never guessed.
+
+Saved Tour Discovery includes both classifications with the record and claimed
+session timestamps. Provable copies remain excluded from automatic restore and
+may be imported normally with the evidence embedded in Tour Provenance.
+`tour-legacy-cleanup` accepts one exact source session/Tour pair, refuses
+uncertain records, shows a modal containing the evidence, and deletes only that
+file. Classification and discovery are read-only and idempotent.
 
 ---
 

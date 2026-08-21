@@ -356,7 +356,10 @@ function discover(payload = {}) {
     const tours = [];
 
     for (const record of scan({ repo: payload.repo })) {
-        if (record.sessionId === current?.id) continue;
+        const legacy = classifyLegacy(record);
+        if (record.sessionId === current?.id) {
+            if (!payload.includeLegacyCurrent || legacy.status === "current") continue;
+        }
         if (sourceSessionId && record.sessionId !== sourceSessionId) continue;
         if (payload.query) {
             const haystack = `${record.tourId} ${record.title || ""}`.toLowerCase();
@@ -373,6 +376,12 @@ function discover(payload = {}) {
             createdAt: record.createdAt,
             updatedAt: record.updatedAt,
             archivedAt: record.archivedAt,
+            ...(legacy.status === "current"
+                ? {}
+                : {
+                      legacyStatus: legacy.status,
+                      legacyEvidence: legacy.evidence,
+                  }),
             steps: (record.steps || []).length,
             staleness,
         });
@@ -380,6 +389,107 @@ function discover(payload = {}) {
     }
 
     return { ok: true, result: { tours } };
+}
+
+function classifyLegacy(record) {
+    if (record.provenance) return { status: "current", evidence: null };
+
+    const claimedSessionCreatedAt = createdAtForSession(
+        path.join(sessionRoot(), record.sessionId || ""),
+    );
+    const recordCreatedAt = Date.parse(record.createdAt || "");
+    const claimedIso = claimedSessionCreatedAt
+        ? new Date(claimedSessionCreatedAt).toISOString()
+        : null;
+
+    if (!Number.isFinite(recordCreatedAt)) {
+        return {
+            status: "uncertain",
+            evidence: {
+                reason: "record creation time is missing or invalid",
+                recordCreatedAt: record.createdAt || null,
+                claimedSessionCreatedAt: claimedIso,
+            },
+        };
+    }
+
+    if (!claimedSessionCreatedAt) {
+        return {
+            status: "uncertain",
+            evidence: {
+                reason: "claiming Copilot session creation time is unavailable",
+                recordCreatedAt: record.createdAt,
+                claimedSessionCreatedAt: null,
+            },
+        };
+    }
+    if (recordCreatedAt < claimedSessionCreatedAt) {
+        return {
+            status: "legacy-copy",
+            evidence: {
+                reason: "record predates the Copilot session that claims it",
+                recordCreatedAt: record.createdAt,
+                claimedSessionCreatedAt: claimedIso,
+            },
+        };
+    }
+    return { status: "current", evidence: null };
+}
+
+async function cleanupLegacy(payload = {}) {
+    const sourceSessionId = String(payload.sourceSessionId || "").trim();
+    const sourceTourId = String(payload.sourceTourId || "").trim();
+    if (!sourceSessionId || !SLUG_PATTERN.test(sourceTourId)) {
+        return { ok: false, error: "sourceSessionId and sourceTourId are required" };
+    }
+
+    const record = scan({ sessionId: sourceSessionId }).find(
+        (entry) => entry.tourId === sourceTourId,
+    );
+    if (!record) return { ok: false, error: "the legacy Tour record was not found" };
+
+    const legacy = classifyLegacy(record);
+    if (legacy.status !== "legacy-copy") {
+        return {
+            ok: false,
+            error:
+                legacy.status === "uncertain"
+                    ? "that record is uncertain and cannot be cleaned up automatically"
+                    : "that record is not a legacy foreign copy",
+        };
+    }
+
+    const answer = await vscode.window.showWarningMessage(
+        `Delete legacy Tour copy "${sourceTourId}" from session ${sourceSessionId}?`,
+        {
+            modal: true,
+            detail:
+                `${legacy.evidence.reason}: ${legacy.evidence.recordCreatedAt} predates ` +
+                `${legacy.evidence.claimedSessionCreatedAt}. Only this exact stored copy will be deleted.`,
+        },
+        "Delete legacy copy",
+    );
+    if (answer !== "Delete legacy copy") {
+        return { ok: true, deleted: false, cancelled: true };
+    }
+
+    try {
+        fs.rmSync(record.file, { force: true });
+    } catch (err) {
+        return { ok: false, error: `could not delete the legacy Tour copy: ${err.message}` };
+    }
+    if (findWorkspaceSession()?.id === sourceSessionId) {
+        tour.unload(sourceTourId);
+    }
+    return {
+        ok: true,
+        result: {
+            deleted: record.file,
+            sourceSessionId,
+            sourceTourId,
+            legacyEvidence: legacy.evidence,
+        },
+    };
 }
 
 function writeTourRecord(record) {
@@ -468,14 +578,14 @@ async function importTour(payload = {}) {
     if (!sourceSessionId || !SLUG_PATTERN.test(sourceTourId)) {
         return { ok: false, error: "sourceSessionId and sourceTourId are required" };
     }
-    if (sourceSessionId === session.id) {
-        return { ok: false, error: "that Tour already belongs to this Copilot session" };
-    }
-
     const source = scan({ sessionId: sourceSessionId }).find(
         (record) => record.tourId === sourceTourId,
     );
     if (!source) return { ok: false, error: "the source Tour was not found" };
+    const legacy = classifyLegacy(source);
+    if (sourceSessionId === session.id && legacy.status !== "legacy-copy") {
+        return { ok: false, error: "that Tour already belongs to this Copilot session" };
+    }
 
     const preferred = String(payload.targetTourId || sourceTourId).trim();
     if (!SLUG_PATTERN.test(preferred)) return { ok: false, error: "targetTourId is invalid" };
@@ -515,7 +625,14 @@ async function importTour(payload = {}) {
         createdAt: now,
         updatedAt: now,
         archivedAt: undefined,
-        provenance: { sourceSessionId, sourceTourId, importedAt },
+        provenance: {
+            sourceSessionId,
+            sourceTourId,
+            importedAt,
+            ...(legacy.status === "legacy-copy"
+                ? { legacyEvidence: legacy.evidence }
+                : {}),
+        },
         steps: (source.steps || []).map((step) => ({ ...step })),
     };
     const file = fileFor(session.dir, tourId);
@@ -644,7 +761,6 @@ function restore() {
     if (!session) return { restored: 0 };
 
     let restored = 0;
-    const sessionCreatedAt = createdAtForSession(session.dir);
     for (const record of scan({ sessionId: session.id })) {
         if (tour.has(record.tourId)) continue;
         if (record.archivedAt) continue;
@@ -652,10 +768,7 @@ function restore() {
         // first cursor move. They preserved its original createdAt, so a tour
         // older than the session that allegedly created it is provably such a
         // clone. Leave it discoverable on disk, but do not auto-restore it.
-        if (
-            sessionCreatedAt &&
-            Date.parse(record.createdAt || "") < sessionCreatedAt
-        ) {
+        if (classifyLegacy(record).status === "legacy-copy") {
             diag(`skipped foreign tour clone during restore: ${record.tourId}`);
             continue;
         }
@@ -772,6 +885,7 @@ module.exports = {
     discover,
     importTour,
     setArchived,
+    cleanupLegacy,
     activateTour,
     remove,
     // internals, exported for the doctor and for probes
@@ -780,5 +894,6 @@ module.exports = {
     restore,
     scan,
     resolveSteps,
+    classifyLegacy,
     toursDir,
 };

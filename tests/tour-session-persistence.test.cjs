@@ -18,6 +18,7 @@ function loadTourstore({
 }) {
     const adopted = [];
     const unloaded = [];
+    const warnings = [];
     const loadedTours = new Map(loadedTour ? [[loadedTour.tourId, loadedTour]] : []);
     const tour = {
         setPersistHandler() {},
@@ -44,7 +45,10 @@ function loadTourstore({
             {
                 commands: { registerCommand: () => ({ dispose() {} }) },
                 window: {
-                    showWarningMessage: async () => warningAnswer,
+                    showWarningMessage: async (message, options, ...actions) => {
+                        warnings.push({ message, options, actions });
+                        return warningAnswer;
+                    },
                     showInformationMessage() {},
                 },
             },
@@ -103,7 +107,7 @@ function loadTourstore({
     } finally {
         Module._load = originalLoad;
     }
-    return { tourstore, adopted, unloaded };
+    return { tourstore, adopted, unloaded, warnings };
 }
 
 function writeTour(sessionDir, tourId, sessionId, overrides = {}) {
@@ -581,6 +585,197 @@ test("unarchive rolls back when the Tour cannot return to the in-memory library"
             "2026-08-21T13:00:00.000Z",
         );
         assert.deepEqual(tourstore.list({}).result.tours, []);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("Saved Tour Discovery classifies provable legacy copies and preserves uncertain records", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const session = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
+    try {
+        fs.mkdirSync(session.dir, { recursive: true });
+        fs.writeFileSync(
+            path.join(session.dir, "workspace.yaml"),
+            "created_at: 2026-06-01T00:00:00.000Z\n",
+            "utf8",
+        );
+        writeTour(session.dir, "legacy-copy", session.id, {
+            createdAt: "2026-01-01T00:00:00.000Z",
+        });
+        writeTour(session.dir, "uncertain-copy", session.id, {
+            createdAt: "not-a-date",
+        });
+        writeTour(session.dir, "current-tour", session.id, {
+            createdAt: "2026-07-01T00:00:00.000Z",
+        });
+        const { tourstore } = loadTourstore({
+            session,
+            workspaceSession: session,
+        });
+
+        const first = tourstore.discover({ includeLegacyCurrent: true });
+        const second = tourstore.discover({ includeLegacyCurrent: true });
+
+        assert.deepEqual(first, second);
+        assert.deepEqual(
+            first.result.tours.map((tour) => ({
+                tourId: tour.tourId,
+                legacyStatus: tour.legacyStatus,
+                legacyEvidence: tour.legacyEvidence,
+            })),
+            [
+                {
+                    tourId: "legacy-copy",
+                    legacyStatus: "legacy-copy",
+                    legacyEvidence: {
+                        reason: "record predates the Copilot session that claims it",
+                        recordCreatedAt: "2026-01-01T00:00:00.000Z",
+                        claimedSessionCreatedAt: "2026-06-01T00:00:00.000Z",
+                    },
+                },
+                {
+                    tourId: "uncertain-copy",
+                    legacyStatus: "uncertain",
+                    legacyEvidence: {
+                        reason: "record creation time is missing or invalid",
+                        recordCreatedAt: "not-a-date",
+                        claimedSessionCreatedAt: "2026-06-01T00:00:00.000Z",
+                    },
+                },
+            ],
+        );
+        assert.equal(fs.existsSync(path.join(session.dir, "porthole", "tours", "legacy-copy.json")), true);
+        assert.equal(fs.existsSync(path.join(session.dir, "porthole", "tours", "uncertain-copy.json")), true);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("a provable legacy copy can be imported with its evidence into the current session", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const session = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
+    try {
+        fs.mkdirSync(session.dir, { recursive: true });
+        fs.writeFileSync(
+            path.join(session.dir, "workspace.yaml"),
+            "created_at: 2026-06-01T00:00:00.000Z\n",
+            "utf8",
+        );
+        const sourceFile = writeTour(session.dir, "legacy-copy", session.id, {
+            createdAt: "2026-01-01T00:00:00.000Z",
+        });
+        const sourceBefore = fs.readFileSync(sourceFile, "utf8");
+        const { tourstore } = loadTourstore({
+            session,
+            workspaceSession: session,
+        });
+
+        const result = await tourstore.importTour({
+            sourceSessionId: session.id,
+            sourceTourId: "legacy-copy",
+            importedAt: "2026-08-21T14:00:00.000Z",
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(result.result.tourId, "legacy-copy-2");
+        assert.deepEqual(result.result.provenance, {
+            sourceSessionId: session.id,
+            sourceTourId: "legacy-copy",
+            importedAt: "2026-08-21T14:00:00.000Z",
+            legacyEvidence: {
+                reason: "record predates the Copilot session that claims it",
+                recordCreatedAt: "2026-01-01T00:00:00.000Z",
+                claimedSessionCreatedAt: "2026-06-01T00:00:00.000Z",
+            },
+        });
+        assert.equal(fs.readFileSync(sourceFile, "utf8"), sourceBefore);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("legacy cleanup confirms and deletes only one provable stored copy", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const current = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
+    const sibling = { id: "session-sibling", dir: path.join(root, "session-sibling") };
+    try {
+        for (const session of [current, sibling]) {
+            fs.mkdirSync(session.dir, { recursive: true });
+            fs.writeFileSync(
+                path.join(session.dir, "workspace.yaml"),
+                "created_at: 2026-06-01T00:00:00.000Z\n",
+                "utf8",
+            );
+        }
+        const legacyFile = writeTour(current.dir, "shared-tour", current.id, {
+            createdAt: "2026-01-01T00:00:00.000Z",
+        });
+        const siblingFile = writeTour(sibling.dir, "shared-tour", sibling.id, {
+            createdAt: "2026-07-01T00:00:00.000Z",
+        });
+        const siblingBefore = fs.readFileSync(siblingFile, "utf8");
+
+        const cancelledStore = loadTourstore({
+            session: current,
+            workspaceSession: current,
+            warningAnswer: undefined,
+        }).tourstore;
+        assert.equal((await cancelledStore.cleanupLegacy({
+            sourceSessionId: current.id,
+            sourceTourId: "shared-tour",
+        })).cancelled, true);
+        assert.equal(fs.existsSync(legacyFile), true);
+
+        const confirmed = loadTourstore({
+            session: current,
+            workspaceSession: current,
+            warningAnswer: "Delete legacy copy",
+        });
+        const result = await confirmed.tourstore.cleanupLegacy({
+            sourceSessionId: current.id,
+            sourceTourId: "shared-tour",
+        });
+
+        assert.equal(result.ok, true);
+        assert.equal(result.result.deleted, legacyFile);
+        assert.equal(fs.existsSync(legacyFile), false);
+        assert.equal(fs.readFileSync(siblingFile, "utf8"), siblingBefore);
+        assert.match(confirmed.warnings[0].message, /shared-tour/);
+        assert.match(confirmed.warnings[0].options.detail, /predates/);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("legacy cleanup refuses uncertain records without prompting", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const session = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
+    try {
+        fs.mkdirSync(session.dir, { recursive: true });
+        fs.writeFileSync(
+            path.join(session.dir, "workspace.yaml"),
+            "created_at: 2026-06-01T00:00:00.000Z\n",
+            "utf8",
+        );
+        const file = writeTour(session.dir, "uncertain-copy", session.id, {
+            createdAt: "not-a-date",
+        });
+        const loaded = loadTourstore({
+            session,
+            workspaceSession: session,
+            warningAnswer: "Delete legacy copy",
+        });
+
+        const result = await loaded.tourstore.cleanupLegacy({
+            sourceSessionId: session.id,
+            sourceTourId: "uncertain-copy",
+        });
+
+        assert.equal(result.ok, false);
+        assert.match(result.error, /uncertain/);
+        assert.equal(fs.existsSync(file), true);
+        assert.deepEqual(loaded.warnings, []);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

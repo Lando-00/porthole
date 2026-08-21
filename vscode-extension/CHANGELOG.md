@@ -46,6 +46,11 @@ the active visuals and default library but remain on disk and available through
 an explicit archived picker or `includeArchived`. Close, Archive and Delete now
 have distinct UI and model-facing actions.
 
+Added safe handling for legacy foreign Tour copies created by older builds.
+Saved Tour Discovery reports provable copies and uncertain evidence explicitly;
+legacy import preserves the evidence, while confirmed cleanup deletes one exact
+copy and refuses uncertain records.
+
 ## 0.6.0
 
 **One Copilot session, one addressed window.** Each companion window now

@@ -332,6 +332,11 @@ deleting it. The sidebar offers **Archive tour** and **Restore archived tour**;
 restoring loads the Tour back when its steps resolve. Close remains a temporary
 Walkthrough pause, while Delete remains confirmed and permanent.
 
+Saved Tour Discovery marks provable historical bug artifacts as **LEGACY COPY**
+with timestamp evidence, and malformed evidence as **UNCERTAIN**. Legacy copies
+can be imported normally or removed with `tour-legacy-cleanup`; cleanup is
+confirmed, exact-file only, and refuses uncertain records.
+
 `tour-activate` takes `{ tourId, step }`, loading the tour from disk first if it
 is not in memory. Acks the tour plus a `staleness` tally when it came off disk.
 
