@@ -51,6 +51,11 @@ Saved Tour Discovery reports provable copies and uncertain evidence explicitly;
 legacy import preserves the evidence, while confirmed cleanup deletes one exact
 copy and refuses uncertain records.
 
+Made Saved Reviews session-owned. Ordinary list/load/delete is exact-session
+only; separate discovery reports historical review metadata, and import creates
+an independent copy with provenance, safe collision naming and confirmed
+replacement.
+
 ## 0.6.0
 
 **One Copilot session, one addressed window.** Each companion window now

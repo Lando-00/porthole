@@ -180,6 +180,9 @@ Set by the CLI so callers can react without parsing English:
 | `review-save` | `{ slug, title }` | **yes** | 0.3.0 |
 | `review-list` | `{ limit, repo }` | **yes** | 0.3.0 |
 | `review-load` | `{ file }` or `{ slug }` | **yes** | 0.3.0 |
+| `review-discover` | `{ repo, sourceSessionId, limit }` | **yes** | 1.0.0 |
+| `review-import` | `{ sourceSessionId, sourceSlug, targetSlug, replace }` | **yes** | 1.0.0 |
+| `review-delete` | `{ slug }` | **yes** | 1.0.0 |
 | `workspace-add` | `{ folders: string[] }` | **yes** | 0.6.0 |
 | `focus` | none | **yes** | 0.7.0 |
 | `preview` | `{ title, changes: [{ file, content }] }` | **yes** | 0.7.0 |
@@ -332,6 +335,12 @@ the library, in the Problems panel and on disk. Only `tour-delete` removes it.
 // review-load result
 { "review": { /* §4 */ }, "resolution": { "resolved": 7, "shifted": 1, "changed": 1, "missing": 0 } }
 ```
+
+Ordinary review save/list/load/delete is scoped to the exact bound Copilot
+session. `review-discover` is the separate read-only cross-session search.
+`review-import` creates a current-session copy with source session/slug/import
+time provenance and safe collision naming; confirmed replacement and deletion
+can affect only the current session's exact file.
 
 ---
 

@@ -83,7 +83,7 @@ same behaviour every time, no model in the loop, no tokens spent.
 
 ## Tools Copilot can call
 
-Fourteen tools are registered with the agent, so it can drive your editor mid-answer
+Sixteen tools are registered with the agent, so it can drive your editor mid-answer
 without you typing anything.
 
 | Tool | What it does |
@@ -97,7 +97,9 @@ without you typing anything.
 | `porthole_tour_cleanup_legacy` | Confirms and deletes one provable legacy copy |
 | `porthole_tour_manage` | Switches, closes or deletes a walkthrough by id |
 | `porthole_problems` | Reads your Problems panel, so it stops guessing at compile errors |
-| `porthole_review` | Saves findings and loads them back, even in a later session |
+| `porthole_review` | Saves, lists, loads or deletes this session's findings |
+| `porthole_review_discover` | Searches read-only Saved Reviews from other sessions |
+| `porthole_review_import` | Copies a discovered review into this session with provenance |
 | `porthole_open_session` | Opens automatically, forces a new window, or reuses one exact window — only when asked |
 | `porthole_windows` | Lists live porthole windows so Copilot can ask which one you mean |
 | `porthole_focus_window` | Requests attention from one exact session window without changing its workspace |

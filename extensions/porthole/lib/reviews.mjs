@@ -9,12 +9,12 @@
 // a companion the findings are still returned, just labelled as unverified.
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { callCompanion, explain } from "./companion.mjs";
 import { ensureCompanion } from "./ensure.mjs";
 import { copilotHome } from "./config.mjs";
-import { companionOptions } from "./target.mjs";
+import { companionOptions, sessionPath } from "./target.mjs";
 
 const SCHEMA = 1;
 const SLUG_PATTERN = /^[\w-]{1,64}$/;
@@ -38,11 +38,14 @@ function readReview(file) {
  * Scans sibling session folders, not just this session's, because the whole
  * point is that a later session can pick up an earlier one's findings.
  */
-export function listReviews({ repo = null, limit = 50 } = {}) {
+export function listReviews({ repo = null, limit = 50, currentSessionPath = null } = {}) {
     const root = sessionRoot();
     let sessions = [];
     try {
-        sessions = readdirSync(root, { withFileTypes: true });
+        const currentId = currentSessionPath ? basename(currentSessionPath) : null;
+        sessions = readdirSync(root, { withFileTypes: true }).filter(
+            (entry) => !currentId || entry.name === currentId,
+        );
     } catch {
         return [];
     }
@@ -128,7 +131,13 @@ export async function review(args = {}, getSession = null) {
     const root = process.cwd();
 
     if (action === "list") {
-        return describeList(listReviews({ repo: args.repo, limit: args.limit }));
+        return describeList(
+            listReviews({
+                repo: args.repo,
+                limit: args.limit,
+                currentSessionPath: sessionPath(getSession),
+            }),
+        );
     }
 
     if (action === "save") {
@@ -167,13 +176,63 @@ export async function review(args = {}, getSession = null) {
         // No window, or it refused: the findings are still useful, they just
         // come with a warning attached.
         if (result.reason === "absent") {
-            const match = listReviews({ limit: 200 }).find((r) => r.slug === args.slug);
+            const match = listReviews({
+                limit: 200,
+                currentSessionPath: sessionPath(getSession),
+            }).find((r) => r.slug === args.slug);
             if (match) return describeFindings(match, null) + openNote;
         }
         return `porthole: ${explain(result)}${openNote}`;
     }
 
-    return `porthole: unknown action '${action}' - use list, save or load.`;
+    if (action === "delete") {
+        const result = await callCompanion(
+            "review-delete",
+            { slug: args.slug },
+            companionOptions(root, getSession),
+        );
+        if (!result.ok) return `porthole: ${explain(result)}`;
+        if (result.cancelled || result.deleted === false) {
+            return "porthole: Saved Review deletion cancelled.";
+        }
+        return `porthole: deleted '${args.slug}' from this Copilot session only.`;
+    }
+
+    return `porthole: unknown action '${action}' - use list, save, load or delete.`;
+}
+
+async function discoverReviews(args = {}, getSession = null) {
+    const result = await callCompanion(
+        "review-discover",
+        { repo: args.repo, sourceSessionId: args.sourceSessionId, limit: args.limit },
+        companionOptions(process.cwd(), getSession),
+    );
+    if (!result.ok) return `porthole: ${explain(result)}`;
+    const reviews = result.result?.reviews || [];
+    if (!reviews.length) return "porthole: Saved Review Discovery found no matches.";
+    return reviews.map((review) =>
+        `${review.sourceSessionId}/${review.slug} - ${review.title} ` +
+        `(${review.findings} findings, ${review.branch || "no branch"}, ` +
+        `created ${review.createdAt || "unknown"}, updated ${review.updatedAt || "unknown"})`,
+    ).join("\n");
+}
+
+async function importSavedReview(args = {}, getSession = null) {
+    const result = await callCompanion(
+        "review-import",
+        {
+            sourceSessionId: args.sourceSessionId,
+            sourceSlug: args.sourceSlug,
+            targetSlug: args.targetSlug,
+            replace: args.replace === true,
+        },
+        companionOptions(process.cwd(), getSession),
+    );
+    if (!result.ok) return `porthole: ${explain(result)}`;
+    if (result.cancelled || result.imported === false) {
+        return `porthole: Saved Review import cancelled.${result.suggestedSlug ? ` Suggested slug: ${result.suggestedSlug}.` : ""}`;
+    }
+    return `porthole: imported '${args.sourceSlug}' as '${result.result.slug}' into this Copilot session.`;
 }
 
 export function tools(getSession = null) {
@@ -182,10 +241,10 @@ export function tools(getSession = null) {
             name: "porthole_review",
             description:
                 "Save the findings currently marked in the user's VS Code window as a named " +
-                "review, list previously saved reviews, or load one back. Use 'save' after " +
+                "review, list this session's reviews, load one back, or delete one. Use 'save' after " +
                 "walking through problems you found, so the work is not lost when the session " +
-                "ends. Use 'list' and 'load' at the start of a session when the user refers to " +
-                "an earlier review - reviews from OTHER sessions are visible too. Loading " +
+                "ends. Other sessions are available only through porthole_review_discover and " +
+                "porthole_review_import. Loading " +
                 "reports which findings still apply, because code moves and changes; discuss " +
                 "them with the user and create todos for the ones worth acting on. Requires " +
                 "the porthole companion VS Code extension to save.",
@@ -194,7 +253,7 @@ export function tools(getSession = null) {
                 properties: {
                     action: {
                         type: "string",
-                        enum: ["list", "save", "load"],
+                        enum: ["list", "save", "load", "delete"],
                         description: "What to do. Defaults to 'list'.",
                     },
                     slug: {
@@ -221,6 +280,40 @@ export function tools(getSession = null) {
                 },
             },
             handler: async (args) => review(args, getSession),
+        },
+        {
+            name: "porthole_review_discover",
+            description:
+                "Search Saved Reviews owned by other Copilot sessions without loading them. " +
+                "Results are read-only and include source session, repository, branch, dates " +
+                "and finding count.",
+            parameters: {
+                type: "object",
+                properties: {
+                    repo: { type: "string" },
+                    sourceSessionId: { type: "string" },
+                    limit: { type: "integer" },
+                },
+            },
+            handler: async (args) => discoverReviews(args, getSession),
+        },
+        {
+            name: "porthole_review_import",
+            description:
+                "Import a discovered Saved Review as an independent current-session copy with " +
+                "provenance. Collisions derive a safe slug unless replacement is explicitly " +
+                "requested and confirmed in VS Code.",
+            parameters: {
+                type: "object",
+                properties: {
+                    sourceSessionId: { type: "string" },
+                    sourceSlug: { type: "string" },
+                    targetSlug: { type: "string" },
+                    replace: { type: "boolean" },
+                },
+                required: ["sourceSessionId", "sourceSlug"],
+            },
+            handler: async (args) => importSavedReview(args, getSession),
         },
     ];
 }

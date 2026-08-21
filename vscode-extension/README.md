@@ -354,8 +354,10 @@ nearby and re-pointed), `changed` or `missing`.
 `review-save` takes `{ slug, title }` and writes the current annotations or tour
 to `<sessionDir>/porthole/reviews/<slug>.json`.
 
-`review-list` takes `{ limit, repo }` and scans **every** session folder, so a
-later session can find an earlier one's reviews.
+`review-list` takes `{ limit, repo }` and returns only the exact bound session's
+Saved Reviews. `review-discover` is the separate read-only cross-session
+search, and `review-import` creates an independent current-session copy with
+provenance. `review-delete` is confirmed and exact-session scoped.
 
 `review-load` takes `{ slug }` or `{ file }` and acks
 `{ ok, result: { review, resolution } }`, where `resolution` counts findings as

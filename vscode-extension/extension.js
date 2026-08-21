@@ -134,6 +134,15 @@ async function dispatch(route, payload) {
         case "review-load":
             return reviews.load(payload);
 
+        case "review-discover":
+            return reviews.discover(payload);
+
+        case "review-import":
+            return reviews.importReview(payload);
+
+        case "review-delete":
+            return reviews.deleteReview(payload);
+
         case "workspace-add":
             return workspace.add(vscode, payload);
 

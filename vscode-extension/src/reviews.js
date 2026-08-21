@@ -25,7 +25,7 @@ const { diag } = require("./log");
 const anchors = require("./anchors");
 const annotations = require("./annotations");
 const tour = require("./tour");
-const { findSession, sessionRoot } = require("./session");
+const { findWorkspaceSession, sessionRoot } = require("./session");
 const { projectFolder, gitHead, isInside, storedPath, absoluteFile, normaliseSlug } = require("./repo");
 
 const SCHEMA = 1;
@@ -34,7 +34,7 @@ const SLUG_PATTERN = /^[\w-]{1,64}$/;
 // --- saving -----------------------------------------------------------------
 
 function save(payload = {}) {
-    const session = findSession();
+    const session = findWorkspaceSession();
     if (!session) {
         return {
             ok: false,
@@ -59,6 +59,7 @@ function save(payload = {}) {
         slug,
         title,
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
         sessionId: session.id,
         repo,
         branch: repo ? gitHead(repo).branch : null,
@@ -138,21 +139,21 @@ function toFinding(f, repo) {
  * Scans sibling session folders rather than just this one: a review is only
  * useful if a later session can find it.
  */
-function list(payload = {}) {
-    const limit = Math.min(200, Math.max(1, Number.parseInt(payload.limit, 10) || 50));
-    const wantRepo = payload.repo ? String(payload.repo).toLowerCase() : null;
+function scan({ sessionId = null, repo = null } = {}) {
+    const wantRepo = repo ? String(repo).toLowerCase() : null;
     const root = sessionRoot();
 
     let sessions = [];
     try {
         sessions = fs.readdirSync(root, { withFileTypes: true });
     } catch {
-        return { ok: true, result: { reviews: [] } };
+        return [];
     }
 
     const reviews = [];
     for (const entry of sessions) {
         if (!entry.isDirectory()) continue;
+        if (sessionId && entry.name !== sessionId) continue;
         const dir = path.join(root, entry.name, "porthole", "reviews");
         let files = [];
         try {
@@ -164,22 +165,163 @@ function list(payload = {}) {
             const file = path.join(dir, name);
             const review = readReview(file);
             if (!review) continue;
+            if (sessionId && review.sessionId !== sessionId) continue;
             if (wantRepo && String(review.repo || "").toLowerCase() !== wantRepo) continue;
-            reviews.push({
-                slug: review.slug,
-                title: review.title,
-                file,
-                createdAt: review.createdAt,
-                sessionId: review.sessionId,
-                repo: review.repo,
-                branch: review.branch,
-                findings: (review.findings || []).length,
-            });
+            reviews.push({ ...review, file });
         }
     }
 
     reviews.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-    return { ok: true, result: { reviews: reviews.slice(0, limit) } };
+    return reviews;
+}
+
+function list(payload = {}) {
+    const session = findWorkspaceSession();
+    const limit = Math.min(200, Math.max(1, Number.parseInt(payload.limit, 10) || 50));
+    const reviews = session
+        ? scan({ sessionId: session.id, repo: payload.repo })
+        : [];
+    return {
+        ok: true,
+        result: {
+            reviews: reviews.slice(0, limit).map((review) => ({
+                slug: review.slug,
+                title: review.title,
+                file: review.file,
+                createdAt: review.createdAt,
+                updatedAt: review.updatedAt,
+                sessionId: review.sessionId,
+                repo: review.repo,
+                branch: review.branch,
+                findings: (review.findings || []).length,
+            })),
+        },
+    };
+}
+
+function discover(payload = {}) {
+    const current = findWorkspaceSession();
+    const limit = Math.min(200, Math.max(1, Number.parseInt(payload.limit, 10) || 50));
+    const reviews = scan({ repo: payload.repo })
+        .filter((review) => review.sessionId !== current?.id)
+        .filter(
+            (review) =>
+                !payload.sourceSessionId ||
+                review.sessionId === String(payload.sourceSessionId),
+        )
+        .slice(0, limit)
+        .map((review) => ({
+            slug: review.slug,
+            title: review.title,
+            sourceSessionId: review.sessionId,
+            repo: review.repo,
+            branch: review.branch,
+            createdAt: review.createdAt,
+            updatedAt: review.updatedAt,
+            findings: (review.findings || []).length,
+        }));
+    return { ok: true, result: { reviews } };
+}
+
+function availableSlug(sessionId, preferred) {
+    const used = new Set(scan({ sessionId }).map((review) => review.slug));
+    if (!used.has(preferred)) return preferred;
+    for (let number = 2; number < 1000; number += 1) {
+        const suffix = `-${number}`;
+        const candidate = `${preferred.slice(0, 64 - suffix.length)}${suffix}`;
+        if (!used.has(candidate)) return candidate;
+    }
+    return `${preferred.slice(0, 50)}-${Date.now()}`.slice(0, 64);
+}
+
+async function importReview(payload = {}) {
+    const session = findWorkspaceSession();
+    if (!session) return { ok: false, error: "no Copilot session is bound to this window" };
+    const sourceSessionId = String(payload.sourceSessionId || "").trim();
+    const sourceSlug = String(payload.sourceSlug || "").trim();
+    if (!sourceSessionId || !SLUG_PATTERN.test(sourceSlug)) {
+        return { ok: false, error: "sourceSessionId and sourceSlug are required" };
+    }
+
+    if (sourceSessionId === session.id) {
+        return { ok: false, error: "that Saved Review already belongs to this Copilot session" };
+    }
+    const source = scan({ sessionId: sourceSessionId }).find(
+        (review) => review.slug === sourceSlug,
+    );
+    if (!source) return { ok: false, error: "the source Saved Review was not found" };
+
+    const preferred = normaliseSlug(payload.targetSlug || sourceSlug);
+    if (!SLUG_PATTERN.test(preferred)) return { ok: false, error: "targetSlug is invalid" };
+    const existing = scan({ sessionId: session.id }).find(
+        (review) => review.slug === preferred,
+    );
+    let slug = preferred;
+    if (existing && payload.replace === true) {
+        const answer = await vscode.window.showWarningMessage(
+            `Replace the Saved Review "${preferred}" in this Copilot session?`,
+            { modal: true, detail: "The historical source review will not be changed." },
+            "Replace",
+        );
+        if (answer !== "Replace") {
+            return {
+                ok: true,
+                imported: false,
+                cancelled: true,
+                suggestedSlug: availableSlug(session.id, preferred),
+            };
+        }
+    } else {
+        slug = availableSlug(session.id, preferred);
+    }
+
+    const now = new Date().toISOString();
+    const record = {
+        ...source,
+        file: undefined,
+        slug,
+        sessionId: session.id,
+        createdAt: now,
+        updatedAt: now,
+        provenance: {
+            sourceSessionId,
+            sourceSlug,
+            importedAt: payload.importedAt || now,
+        },
+        findings: (source.findings || []).map((finding) => ({ ...finding })),
+    };
+    const file = path.join(session.dir, "porthole", "reviews", `${slug}.json`);
+    try {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        const tmp = `${file}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify(record, null, 2), "utf8");
+        fs.renameSync(tmp, file);
+    } catch (err) {
+        return { ok: false, error: `could not import the Saved Review: ${err.message}` };
+    }
+    return { ok: true, result: { slug, file, provenance: record.provenance } };
+}
+
+async function deleteReview(payload = {}) {
+    const session = findWorkspaceSession();
+    const slug = String(payload.slug || "").trim();
+    if (!session) return { ok: false, error: "no Copilot session is bound to this window" };
+    if (!SLUG_PATTERN.test(slug)) return { ok: false, error: "a review slug is required" };
+    const review = scan({ sessionId: session.id }).find((entry) => entry.slug === slug);
+    if (!review) return { ok: false, error: `no Saved Review called '${slug}' was found` };
+
+    const answer = await vscode.window.showWarningMessage(
+        `Delete the Saved Review "${review.title || slug}"?`,
+        { modal: true, detail: "Only this Copilot session's exact review file will be deleted." },
+        "Delete review",
+    );
+    if (answer !== "Delete review") return { ok: true, deleted: false, cancelled: true };
+    try {
+        fs.rmSync(review.file, { force: true });
+    } catch (err) {
+        return { ok: false, error: `could not delete the Saved Review: ${err.message}` };
+    }
+    return { ok: true, result: { slug, deleted: review.file } };
 }
 
 function readReview(file) {
@@ -195,7 +337,11 @@ function readReview(file) {
 // --- loading ----------------------------------------------------------------
 
 async function load(payload = {}) {
-    const file = payload.file ? resolveReviewPath(payload.file) : findBySlug(payload.slug);
+    const session = findWorkspaceSession();
+    if (!session) return { ok: false, error: "no Copilot session is bound to this window" };
+    const file = payload.file
+        ? resolveReviewPath(payload.file, session.id)
+        : findBySlug(payload.slug, session.id);
     if (!file) {
         return {
             ok: false,
@@ -271,9 +417,9 @@ function describe(finding, status) {
     return `${head}${body}\n\n_(the code here has changed since the review was saved, so this may no longer apply)_`;
 }
 
-function findBySlug(slug) {
+function findBySlug(slug, sessionId) {
     if (!slug || !SLUG_PATTERN.test(String(slug))) return null;
-    const match = list({ limit: 200 }).result.reviews.find((r) => r.slug === slug);
+    const match = scan({ sessionId }).find((r) => r.slug === slug);
     return match ? match.file : null;
 }
 
@@ -283,13 +429,14 @@ function findBySlug(slug) {
  * `file` comes from outside, and without this check `review-load` is an
  * arbitrary JSON file reader.
  */
-function resolveReviewPath(file) {
+function resolveReviewPath(file, sessionId) {
     const resolved = path.resolve(String(file));
     const root = path.resolve(sessionRoot());
     if (!isInside(root, resolved)) return null;
     const parts = resolved.slice(root.length).split(path.sep).filter(Boolean);
     // <sessionId>/porthole/reviews/<name>.json
     if (parts.length !== 4) return null;
+    if (parts[0] !== sessionId) return null;
     if (parts[1] !== "porthole" || parts[2] !== "reviews") return null;
     if (!parts[3].endsWith(".json")) return null;
     return resolved;
@@ -351,4 +498,13 @@ function activate(context) {
     );
 }
 
-module.exports = { activate, save, list, load };
+module.exports = {
+    activate,
+    save,
+    list,
+    discover,
+    importReview,
+    deleteReview,
+    load,
+    scan,
+};
