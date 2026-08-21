@@ -45,8 +45,8 @@
   "main": "./extension.js",
   "scripts": {
     "icon": "pwsh -File scripts/make-icon.ps1",
-    "package": "npx --yes @vscode/vsce package -o porthole-companion.vsix",
-    "publish": "npx --yes @vscode/vsce publish",
+    "package": "npx --yes @vscode/vsce@3.9.2 package -o porthole-companion.vsix",
+    "publish": "npx --yes @vscode/vsce@3.9.2 publish",
     "install-local": "npm run package && code-insiders --install-extension porthole-companion.vsix --force"
   },
   "contributes": {

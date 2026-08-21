@@ -98,6 +98,9 @@ check("the companion manifest is valid", () => {
     for (const required of ["onUri", "onStartupFinished"]) {
         if (!events.includes(required)) throw new Error(`activationEvents needs '${required}'`);
     }
+    if (!/@vscode\/vsce@\d+\.\d+\.\d+\s+package/.test(pkg.scripts?.package || "")) {
+        throw new Error("companion packaging must pin an exact @vscode/vsce version");
+    }
     return `v${pkg.version}`;
 });
 

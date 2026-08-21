@@ -121,7 +121,7 @@ jobs:
         run: |
           COMPANION=$(node -p "require('./vscode-extension/package.json').version")
           echo "companion=$COMPANION" >> "$GITHUB_ENV"
-          LIVE=$(npx --yes @vscode/vsce show Lando-00.porthole-companion --json 2>/dev/null \
+          LIVE=$(npx --yes @vscode/vsce@3.9.2 show Lando-00.porthole-companion --json 2>/dev/null \
                  | node -p "try{JSON.parse(require('fs').readFileSync(0,'utf8')).versions[0].version}catch{''}" || true)
           echo "live version: '${LIVE}', building: '${COMPANION}'"
           if [ "$LIVE" = "$COMPANION" ]; then
@@ -134,6 +134,6 @@ jobs:
       - name: Publish to the VS Code Marketplace
         if: steps.token.outputs.present == 'true' && steps.published.outputs.skip == 'false'
         working-directory: vscode-extension
-        run: npx --yes @vscode/vsce publish --pat "$VSCE_PAT"
+        run: npx --yes @vscode/vsce@3.9.2 publish --pat "$VSCE_PAT"
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}

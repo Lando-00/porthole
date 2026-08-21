@@ -12,10 +12,14 @@ Archive/Unarchive, and evidence-based legacy cleanup.
 
 - CLI plugin: `1.0.0`
 - VS Code companion: `1.0.0`
+- Packaging tool: `@vscode/vsce@3.9.2`
 - Git tag to create after qualification: `v1.0.0`
 - GitHub release asset: `porthole-companion-1.0.0.vsix`
-- SHA-256:
-  `6C664DBC1E08F3E5BEC7BF68EFFA2F4F5423CF7945F056A588EF9FAE1EA45C15`
+
+The packaging inputs and tool version are committed and reproducible. VSIX ZIP
+entries carry build timestamps, so byte-for-byte hashes are not treated as a
+release invariant; qualification verifies the packaged file list and embedded
+manifest version instead.
 
 ## Qualification evidence
 
