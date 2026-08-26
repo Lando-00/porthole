@@ -291,29 +291,33 @@ export function findCompanion(contextPath, options = {}) {
 /**
  * Why a window cannot be reached, or null when it can.
  *
- * The two halves only meet on a shared filesystem. A window running in WSL, a
- * container or over SSH looks perfectly healthy from both sides while writing
- * to a completely different disk, so every request would burn the full timeout
- * and then blame the window for being busy. Saying so up front is the whole
- * point of publishing these fields.
+ * The two halves only meet on a shared filesystem, and the evidence for that is
+ * `tmpdir` and `copilotHome` - not where the window happens to be hosted.
+ *
+ * A non-null `remoteName` used to be refused outright, which was wrong in both
+ * directions. The case it meant to catch - CLI on the host, editor attached to
+ * a remote - never reaches here at all: that companion publishes its heartbeat
+ * into the *remote's* `~/.copilot`, which this process cannot read, so it is
+ * already `absent`. What the check actually caught was the correct setup, with
+ * the CLI running inside the same WSL distribution, container or Codespace as
+ * the editor. Those share every path, and were refused with advice to do the
+ * thing the user was already doing.
+ *
+ * So `remoteName` now only explains a mismatch, rather than being one.
  */
 function unreachable(companion) {
-    if (companion.remoteName) {
-        return (
-            `the VS Code window is running in ${companion.remoteName}, so it cannot see this ` +
-            "machine's files. Run the CLI inside the same environment."
-        );
-    }
+    const where = companion.remoteName ? ` (running in ${companion.remoteName})` : "";
+
     if (companion.tmpdir && !samePath(companion.tmpdir, tmpdir())) {
         return (
-            `the VS Code window uses a different temp directory (${companion.tmpdir}), so it ` +
-            "cannot see this session's requests."
+            `the VS Code window${where} uses a different temp directory ` +
+            `(${companion.tmpdir}), so it cannot see this session's requests.`
         );
     }
     if (companion.copilotHome && !samePath(companion.copilotHome, copilotHome())) {
         return (
-            `the VS Code window uses a different Copilot home (${companion.copilotHome}). ` +
-            "Set COPILOT_HOME to the same value in both."
+            `the VS Code window${where} uses a different Copilot home ` +
+            `(${companion.copilotHome}). Set COPILOT_HOME to the same value in both.`
         );
     }
     return null;

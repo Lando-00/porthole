@@ -276,20 +276,25 @@ function reverseChannel(report, session, ctx) {
     }
 
     for (const c of findCompanions()) {
-        if (c.remoteName) {
+        const sameHome =
+            !c.copilotHome || c.copilotHome.toLowerCase() === copilotHome().toLowerCase();
+        if (!sameHome) {
             report.add(
                 "fail",
-                `a window is running in ${c.remoteName}, which cannot see this machine's files`,
-                "run the CLI inside the same environment as VS Code",
+                `a window is using a different Copilot home (${c.copilotHome})` +
+                    (c.remoteName ? ` (running in ${c.remoteName})` : ""),
+                "make COPILOT_HOME match in both",
             );
             continue;
         }
-        if (c.copilotHome && c.copilotHome.toLowerCase() !== copilotHome().toLowerCase()) {
-            report.add(
-                "fail",
-                `a window is using a different Copilot home (${c.copilotHome})`,
-                "make COPILOT_HOME match in both",
-            );
+        // Sharing this machine's Copilot home is the thing that matters, and a
+        // window that published its heartbeat here has already proved it. Where
+        // it is hosted is worth saying, but it is not a fault: the CLI running
+        // inside the same WSL distribution, container or Codespace as the editor
+        // is a supported layout, and reporting it as a failure sent people
+        // chasing a problem they did not have.
+        if (c.remoteName) {
+            report.add("ok", `a window is running in ${c.remoteName}, sharing this filesystem`);
         }
     }
 

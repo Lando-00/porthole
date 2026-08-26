@@ -327,3 +327,68 @@ test("matching capabilities cannot cross a different Local Environment", async (
         harness.dispose();
     }
 });
+
+test("a window in WSL that shares this filesystem is reachable", async () => {
+    // The CLI running inside the same WSL distribution, container or Codespace
+    // as the editor is a supported layout: every path matches and the transport
+    // works. Refusing it on remoteName alone told the user to do the thing they
+    // were already doing, and the genuinely split case never reaches here - a
+    // companion on the other side of the boundary publishes its heartbeat into
+    // that side's ~/.copilot, so it is already absent.
+    const harness = await createPortholeHarness();
+    try {
+        const session = harness.addSession(
+            "abababab-abab-abab-abab-abababababab",
+            "/home/me/repo",
+        );
+        const window = harness.addWindow({
+            windowId: "5151515151515151",
+            session,
+            presenceOverrides: { remoteName: "wsl" },
+        });
+
+        const { tools } = await import("../extensions/porthole/lib/opensession.mjs");
+        const result = await harness.invokeTool(
+            tools(() => session),
+            "porthole_focus_window",
+            {},
+        );
+
+        assert.doesNotMatch(result, /running in wsl/i);
+        assert.equal(window.requests.length, 1, "the request must actually be delivered");
+        assert.equal(window.requests[0].route, "focus");
+    } finally {
+        harness.dispose();
+    }
+});
+
+test("a remote window on a different filesystem is still refused, and says where it is", async () => {
+    const harness = await createPortholeHarness();
+    try {
+        const session = harness.addSession(
+            "cdcdcdcd-cdcd-cdcd-cdcd-cdcdcdcdcdcd",
+            "C:\\repo",
+        );
+        const window = harness.addWindow({
+            windowId: "6262626262626262",
+            session,
+            presenceOverrides: {
+                remoteName: "wsl",
+                copilotHome: "/home/me/.copilot",
+            },
+        });
+
+        const { tools } = await import("../extensions/porthole/lib/opensession.mjs");
+        const result = await harness.invokeTool(
+            tools(() => session),
+            "porthole_focus_window",
+            {},
+        );
+
+        assert.match(result, /different Copilot home/);
+        assert.match(result, /running in wsl/, "the remote name explains the mismatch");
+        assert.deepEqual(window.requests, [], "nothing may be delivered across the boundary");
+    } finally {
+        harness.dispose();
+    }
+});

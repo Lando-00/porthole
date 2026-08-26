@@ -538,19 +538,35 @@ left-over one.
 
 ### Remote and cross-filesystem pairings
 
-The two halves only meet on a shared filesystem. When VS Code runs in WSL, a
-container, over SSH, or in the browser, the extension host's `os.tmpdir()` and
-home directory are **not** the CLI's, and every request would time out with no
-explanation.
+The two halves only meet on a shared filesystem, and the evidence for that is
+`tmpdir` and `copilotHome` — **not** where the window is hosted.
 
-Both presence files therefore publish `tmpdir` and `copilotHome`. Before
-pairing, each side compares them; a mismatch, or a non-null `remoteName` paired
-with a local CLI, is reported immediately as an unsupported pairing:
+Both presence files publish those two paths. Before pairing, each side compares
+them; a mismatch is reported immediately as an unsupported pairing:
 
-> porthole: this VS Code window is running in WSL, so it cannot see the CLI's
-> temp directory. Run the CLI inside the same environment.
+> porthole: the VS Code window (running in wsl) uses a different Copilot home
+> (/home/me/.copilot). Set COPILOT_HOME to the same value in both.
 
 Detecting this is the whole point — a clear refusal beats a silent timeout.
+
+**`remoteName` explains a mismatch; it never causes one.** Running in WSL, a
+container, a Codespace or over SSH is not by itself a reason to refuse, for two
+reasons:
+
+- The pairing it was meant to catch — CLI on the host, editor attached to a
+  remote — never gets this far. That companion publishes its heartbeat into the
+  *remote's* `~/.copilot`, which the local CLI cannot read, so the answer is
+  already `absent`.
+- The pairing it actually caught was the supported one: the CLI running
+  **inside** the same WSL distribution, container or Codespace as the editor.
+  Every path matches there, the transport works, and the reverse channel never
+  had the check at all — so "Send to Copilot" worked while every CLI-to-editor
+  route was refused, advising the user to do what they were already doing.
+
+A window that published its heartbeat into *this* `~/.copilot` has already
+demonstrated it shares this filesystem. `remoteName` is carried so a mismatch
+can name the environment involved, and so `/porthole` can report where a window
+is hosted — as information, not as a fault.
 
 ---
 
