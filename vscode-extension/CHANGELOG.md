@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.0.2
+
+Bug fixes.
+
+- One unanswered notification no longer stops the window answering anything
+  else. Requests are still claimed in order, but a change preview waiting on
+  Apply or Cancel no longer holds up everything behind it.
+- Requests are now also polled for, not only watched for, so a home directory
+  on a network, roaming or cloud-synced filesystem cannot silently strand them.
+- A result that could not be written because a virus scanner briefly locked the
+  file is retried rather than discarded, so work the window really did is no
+  longer reported as never having happened.
+- Saving a review twice no longer overwrites the first one.
+- A tour is no longer corrupted when the same Copilot session is open in two
+  windows.
+- A failed tour import no longer leaves its file behind to reappear later.
+- The first-run walkthrough timer no longer fires into a closed window.
+- Outboxes left by finished sessions are swept from the home directory.
+
 ## 1.0.1
 
 Performance and stalls.

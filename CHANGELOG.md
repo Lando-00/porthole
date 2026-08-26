@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.2
+
+Bug fixes, from an audit of what breaks in ordinary use.
+
+- A window could look dead while it was perfectly healthy. Requests were
+  handled one at a time, and a change preview waits for you to click Apply or
+  Cancel — so an unanswered notification left every later command unanswered
+  too, until it timed out. `/porthole` then reported the window as broken.
+- Requests could be stranded entirely on network, roaming or cloud-synced home
+  directories, where the mechanism that notices a new request is unreliable.
+  There is now a fallback that does not depend on it.
+- A command that had already done its work could be reported as having timed
+  out, if a virus scanner briefly locked the file used to report the result.
+  The model then retried, and the work happened twice.
+- After an unclean shutdown and a reboot, porthole could refuse every command
+  for a session and never recover, because a leftover record named a process id
+  the system had since reused.
+- Closing the laptop lid during a change preview no longer consumes the time
+  you have to answer it. Previously the CLI gave up while the diff was still on
+  screen, and Apply then wrote files it had already reported as not applied.
+- Saving a review twice no longer destroys the first one. Untitled saves both
+  wanted the same name; the second now gets its own, and says so.
+- A tour can no longer be corrupted by having the same Copilot session open in
+  two VS Code windows.
+- An outbox holding a selection of your source code is no longer left behind in
+  your home directory when a session exits.
+
 ## 1.0.1
 
 Performance. Porthole spent a lot of its time waiting on things it could
