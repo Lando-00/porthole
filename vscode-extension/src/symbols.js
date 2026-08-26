@@ -37,6 +37,11 @@ const IGNORED_DIRS = new Set([
 
 const MAX_SCAN_BYTES = 1024 * 1024;
 const MAX_SCAN_FILES = 4000;
+// A file count is not a time bound: four thousand synchronous reads of files up
+// to a megabyte each can hold the extension host - and therefore the whole
+// window - for a long time. This caps how long the user's editor can be frozen,
+// whatever the tree turns out to contain.
+const MAX_SCAN_MS = 1500;
 
 /** A cold language server must never hang the ack. */
 function withTimeout(promise, ms, fallback) {
@@ -217,8 +222,11 @@ async function fromTextScan(query, payload) {
     // that merely contains the word was the bulk of the cost on a large tree.
     const patterns = definitionPatterns(query);
 
+    // One budget across every workspace folder, not one each, so a multi-root
+    // workspace cannot multiply the freeze.
+    const budget = { count: 0, deadline: Date.now() + MAX_SCAN_MS };
     for (const folder of vscode.workspace.workspaceFolders || []) {
-        scanDir(folder.uri.fsPath, query, hits, { count: 0 }, patterns);
+        scanDir(folder.uri.fsPath, query, hits, budget, patterns);
     }
 
     const filtered = payload.file ? hits.filter((h) => h.file.endsWith(payload.file)) : hits;
@@ -279,7 +287,7 @@ function scanDir(dir, query, hits, budget, patterns) {
     }
 
     for (const entry of entries) {
-        if (budget.count >= MAX_SCAN_FILES) return;
+        if (budget.count >= MAX_SCAN_FILES || Date.now() >= budget.deadline) return;
         if (entry.name.startsWith(".") && entry.name !== ".github") continue;
 
         const full = `${dir}${process.platform === "win32" ? "\\" : "/"}${entry.name}`;
