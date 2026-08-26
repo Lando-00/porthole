@@ -22,6 +22,7 @@ const vscode = require("vscode");
 const { diag } = require("./log");
 const anchors = require("./anchors");
 const tour = require("./tour");
+const atomic = require("./atomic");
 const { findWorkspaceSession, sessionRoot } = require("./session");
 const { projectFolder, gitHead, storedPath, absoluteFile } = require("./repo");
 
@@ -145,11 +146,10 @@ function save(tourId) {
 
     const file = fileFor(session.dir, tourId);
     try {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        // Write then rename, so a reader never sees a half-written tour.
-        const tmp = `${file}.tmp`;
-        fs.writeFileSync(tmp, JSON.stringify(record, null, 2), "utf8");
-        fs.renameSync(tmp, file);
+        // Write then rename, so a reader never sees a half-written tour, and
+        // under a temp name unique to this writer, so a second window bound to
+        // the same session cannot interleave its bytes with ours.
+        atomic.writeJson(file, record);
     } catch (err) {
         diag(`tour save failed: ${tourId}: ${err.message}`);
         return { ok: false, error: `could not write the tour: ${err.message}` };
@@ -504,9 +504,7 @@ async function cleanupLegacy(payload = {}) {
 function writeTourRecord(record) {
     const stored = { ...record };
     delete stored.file;
-    const tmp = `${record.file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(stored, null, 2), "utf8");
-    fs.renameSync(tmp, record.file);
+    atomic.writeJson(record.file, stored);
 }
 
 function setArchived(payload = {}) {
@@ -646,17 +644,24 @@ async function importTour(payload = {}) {
     };
     const file = fileFor(session.dir, tourId);
     try {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        const tmp = `${file}.tmp`;
-        fs.writeFileSync(tmp, JSON.stringify(record, null, 2), "utf8");
-        fs.renameSync(tmp, file);
+        atomic.writeJson(file, record);
     } catch (err) {
         return { ok: false, error: `could not import the Tour: ${err.message}` };
     }
 
     const { steps, staleness } = resolveSteps(record);
     const adopted = tour.adopt(liveTour(record, steps, staleness));
-    if (!adopted) return { ok: false, error: "the Tour Library is full; close a Tour first" };
+    if (!adopted) {
+        // The file was already on disk, and leaving it there would mean an
+        // import we reported as failed quietly reappearing at the next window
+        // restore, when restore() picks the orphan up.
+        try {
+            fs.rmSync(file, { force: true });
+        } catch (err) {
+            diag(`could not remove the orphaned import ${tourId}: ${err.message}`);
+        }
+        return { ok: false, error: "the Tour Library is full; close a Tour first" };
+    }
 
     return {
         ok: true,

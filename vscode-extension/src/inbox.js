@@ -20,6 +20,14 @@ const ROUTE_RE = /^[A-Za-z0-9-]{0,64}$/;
 // but make it large enough for the preview module's documented 5 MB payload.
 const MAX_REQUEST_BYTES = 6 * 1024 * 1024;
 const PROCESSING = ".processing";
+// A long-running route must not stop the next request being claimed, but an
+// unbounded fan-out would let a stuck window accumulate work without limit.
+const MAX_IN_FLIGHT = 8;
+// fs.watch is the fast path, not the only path. It drops events on network and
+// synced filesystems, and a watcher that errors once is never re-armed - which
+// would silently strand every request to this window. Every other channel in
+// porthole already polls as a backstop; this one now does too.
+const FALLBACK_POLL_MS = 1000;
 
 const active = new Set();
 
@@ -159,17 +167,26 @@ function readRequest(file, fileRequestId) {
     };
 }
 
-async function consume(state, entry) {
+/**
+ * Claims one request and starts handling it.
+ *
+ * Claiming is synchronous and handling is not awaited here, so a route that
+ * legitimately takes a long time cannot hold up the queue behind it. That is
+ * not hypothetical: `preview` parks on an Apply/Cancel notification until the
+ * user answers it, and while it did so every other request to this window went
+ * unclaimed and unacked until the CLI gave up on it - one ignored toast made a
+ * perfectly healthy window look dead, `ping` included.
+ */
+function consume(state, entry) {
     const requestId = entryRequestId(entry);
     if (!requestId) {
         discardInvalidEntry(state.dir, entry);
         return;
     }
 
-    let source;
     let claimed;
     try {
-        source = childPath(state.dir, entry);
+        const source = childPath(state.dir, entry);
         claimed = childPath(state.processing, entry);
         fs.renameSync(source, claimed);
     } catch {
@@ -177,6 +194,16 @@ async function consume(state, entry) {
         return;
     }
 
+    state.inFlight += 1;
+    void handle(state, claimed, requestId).finally(() => {
+        state.inFlight -= 1;
+        // Anything the concurrency cap made us leave behind is still sitting in
+        // the inbox, so look again now that there is room.
+        schedule(state);
+    });
+}
+
+async function handle(state, claimed, requestId) {
     try {
         const request = readRequest(claimed, requestId);
         if (request) {
@@ -198,7 +225,7 @@ async function consume(state, entry) {
     }
 }
 
-async function scan(state) {
+function scan(state) {
     let entries;
     try {
         entries = fs.readdirSync(state.dir);
@@ -209,7 +236,10 @@ async function scan(state) {
     for (const entry of entries) {
         if (state.stopped) return;
         if (!entry.endsWith(".json")) continue;
-        await consume(state, entry);
+        // Leave the rest for the next pass rather than opening an unbounded
+        // number of routes at once.
+        if (state.inFlight >= MAX_IN_FLIGHT) return;
+        consume(state, entry);
     }
 }
 
@@ -223,7 +253,10 @@ function schedule(state) {
         try {
             while (state.scanRequested && !state.stopped) {
                 state.scanRequested = false;
-                await scan(state);
+                scan(state);
+                // Yield, so a watcher event that arrives mid-pass is folded in
+                // rather than starting a second overlapping loop.
+                await Promise.resolve();
             }
         } catch (err) {
             diag(`porthole inbox scan failed: ${err.message}`);
@@ -249,6 +282,8 @@ function start(windowId, onRequest) {
         ...paths,
         onRequest,
         watcher: null,
+        poller: null,
+        inFlight: 0,
         scanRequested: false,
         scanning: false,
         stopped: false,
@@ -265,12 +300,17 @@ function start(windowId, onRequest) {
         );
         if (typeof state.watcher.on === "function") {
             state.watcher.on("error", (err) => {
+                // Deliberately not fatal: the poll below is what keeps this
+                // window reachable once the watcher has given up.
                 diag(`porthole inbox watcher failed: ${err.message}`);
             });
         }
     } catch (err) {
         diag(`porthole inbox watcher unavailable: ${err.message}`);
     }
+
+    state.poller = setInterval(() => schedule(state), FALLBACK_POLL_MS);
+    if (typeof state.poller.unref === "function") state.poller.unref();
 
     // Handles requests written before the extension host activated.
     schedule(state);
@@ -292,6 +332,8 @@ function stop(expected = null) {
     } catch {
         // Already closed.
     }
+    if (state.poller) clearInterval(state.poller);
+    state.poller = null;
 
     // Only this host's window directory is removed. Never sweep the inbox
     // root or another window's directory during deactivation.

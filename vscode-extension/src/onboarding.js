@@ -61,7 +61,7 @@ function activate(context) {
     // already restoring, and skipped entirely when a session is already
     // connected: someone mid-conversation with the CLI has evidently worked out
     // how to use this and does not need the tour.
-    setTimeout(() => {
+    const timer = setTimeout(() => {
         if (vscode.workspace.getConfiguration("porthole").get("gettingStarted.show", true) === false) {
             return;
         }
@@ -70,6 +70,9 @@ function activate(context) {
             (err) => diag(`could not open the walkthrough: ${err.message}`),
         );
     }, 3000);
+    // Otherwise a window closed within those three seconds still fires this,
+    // running a command against an extension host that has already gone.
+    context.subscriptions.push({ dispose: () => clearTimeout(timer) });
 }
 
 module.exports = { activate, open };

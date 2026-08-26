@@ -10,15 +10,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+    existsSync,
     mkdirSync,
     mkdtempSync,
+    readFileSync,
     readdirSync,
     renameSync,
     rmSync,
     watch,
     writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, uptime } from "node:os";
 import { join } from "node:path";
 
 const WINDOW_ID = "abcdef0123456789";
@@ -159,4 +161,44 @@ test("a zero timeout still checks once and does not hang", async () => {
     assert.equal(result.ok, false);
     assert.equal(result.reason, "timeout");
     assert.ok(Date.now() - started < 2000, "a zero timeout must return promptly");
+});
+
+test("a presence file written before this boot is not trusted", async () => {
+    // A hard power-off leaves the heartbeat behind. After a reboot its pid may
+    // belong to an unrelated process, and probing one we do not own answers
+    // EPERM - which is deliberately read as "alive". The stale record then
+    // never expired, so reopening the same session produced two apparent owners
+    // and every route refused as ambiguous, permanently.
+    const home = mkdtempSync(join(tmpdir(), "porthole-boot-"));
+    const previous = process.env.COPILOT_HOME;
+    process.env.COPILOT_HOME = home;
+    mkdirSync(join(home, "porthole"), { recursive: true });
+
+    const stale = join(home, "porthole", "companion-4242.json");
+    const bootedAt = Date.now() - uptime() * 1000;
+    writeFileSync(
+        stale,
+        JSON.stringify({
+            pid: process.pid, // a pid that is definitely alive right now
+            windowId: "00000000deadbeef",
+            appName: "Code",
+            sessionId: "old-session",
+            workspaceFolders: [],
+            // ...but the record predates this boot, so it cannot be ours.
+            updatedAt: new Date(bootedAt - 60 * 60 * 1000).toISOString(),
+        }),
+        "utf8",
+    );
+
+    const { findCompanions } = await import(
+        `../extensions/porthole/lib/companion.mjs?boot=${Math.random()}`
+    );
+    const found = findCompanions();
+
+    assert.equal(found.length, 0, "a pre-boot heartbeat must not count as a live window");
+    assert.equal(existsSync(stale), false, "and it must be pruned, not left to mislead forever");
+
+    if (previous === undefined) delete process.env.COPILOT_HOME;
+    else process.env.COPILOT_HOME = previous;
+    rmSync(home, { recursive: true, force: true });
 });

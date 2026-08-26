@@ -22,11 +22,53 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
+const { diag } = require("./log");
+
 const ROOT = path.join(os.tmpdir(), "porthole");
 const REQ_DIR = path.join(ROOT, "req");
 const ACK_DIR = path.join(ROOT, "ack");
 
 const MAX_AGE_MS = 60 * 60 * 1000;
+// Retry schedule for a rename the filesystem is momentarily refusing.
+const RENAME_RETRY_MS = [2, 5, 15, 40];
+
+/**
+ * Blocks for `ms`, because the callers here are synchronous.
+ *
+ * Only ever used for the few milliseconds a virus scanner holds a file it has
+ * just seen created; the alternative is losing the acknowledgment entirely.
+ */
+function pause(ms) {
+    try {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    } catch {
+        // No SharedArrayBuffer: retry immediately rather than not at all.
+    }
+}
+
+/**
+ * Publishes a finished file, retrying a transient lock.
+ *
+ * On Windows a real-time virus scanner routinely holds a just-written file open
+ * for a few milliseconds, and the rename fails with EBUSY, EPERM or EACCES.
+ * Swallowing that meant the route had already done its work - annotated, moved
+ * the cursor, applied a preview - while the CLI waited out its timeout and told
+ * the model nothing had happened. The model then retried, and the side effect
+ * happened twice.
+ */
+function publish(tmp, file) {
+    for (let attempt = 0; ; attempt += 1) {
+        try {
+            fs.renameSync(tmp, file);
+            return;
+        } catch (err) {
+            const transient =
+                err.code === "EBUSY" || err.code === "EPERM" || err.code === "EACCES";
+            if (!transient || attempt >= RENAME_RETRY_MS.length) throw err;
+            pause(RENAME_RETRY_MS[attempt]);
+        }
+    }
+}
 
 function ensureDirs() {
     fs.mkdirSync(REQ_DIR, { recursive: true });
@@ -80,9 +122,12 @@ function writeAck(requestId, body) {
         // Write then rename, so a reader never sees a half-written ack.
         const tmp = `${file}.tmp`;
         fs.writeFileSync(tmp, JSON.stringify({ ...body, at: new Date().toISOString() }), "utf8");
-        fs.renameSync(tmp, file);
-    } catch {
-        // An unwritable temp dir is not worth breaking the command over.
+        publish(tmp, file);
+    } catch (err) {
+        // Nothing here can rescue the CLI's request - it will time out - but a
+        // silent swallow left no way to tell "the window never saw it" from
+        // "the window did the work and could not say so".
+        diag(`porthole could not write the ack for ${requestId}: ${err.message}`);
     }
 }
 

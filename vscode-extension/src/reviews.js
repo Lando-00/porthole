@@ -25,6 +25,7 @@ const { diag } = require("./log");
 const anchors = require("./anchors");
 const annotations = require("./annotations");
 const tour = require("./tour");
+const atomic = require("./atomic");
 const { findWorkspaceSession, sessionRoot } = require("./session");
 const { projectFolder, gitHead, isInside, storedPath, absoluteFile, normaliseSlug } = require("./repo");
 
@@ -48,10 +49,19 @@ function save(payload = {}) {
     }
 
     const title = String(payload.title || "").trim() || defaultTitle();
-    const slug = normaliseSlug(payload.slug || title);
-    if (!SLUG_PATTERN.test(slug)) {
-        return { ok: false, error: `'${slug}' is not a usable name` };
+    const preferred = normaliseSlug(payload.slug || title);
+    if (!SLUG_PATTERN.test(preferred)) {
+        return { ok: false, error: `'${preferred}' is not a usable name` };
     }
+
+    // A save must never quietly destroy an earlier one. `defaultTitle()` falls
+    // back to the literal "review", so two untitled saves in the same session
+    // both wanted `review.json` - and the second overwrote hand-written
+    // findings and narration with no warning at all. Import already derives a
+    // free name on collision; saving now does the same, and reports the name it
+    // actually used. Overwriting stays possible, but only when asked for.
+    const slug = payload.replace === true ? preferred : availableSlug(session.id, preferred);
+    const replaced = slug === preferred && payload.replace === true;
 
     const repo = projectFolder();
     const review = {
@@ -71,16 +81,22 @@ function save(payload = {}) {
     const file = path.join(dir, `${slug}.json`);
     try {
         fs.mkdirSync(dir, { recursive: true });
-        // Write then rename, so a reader never sees a half-written review.
-        const tmp = `${file}.tmp`;
-        fs.writeFileSync(tmp, JSON.stringify(review, null, 2), "utf8");
-        fs.renameSync(tmp, file);
+        atomic.writeJson(file, review);
     } catch (err) {
         return { ok: false, error: `could not write the review: ${err.message}` };
     }
 
     diag(`review saved: ${file} (${review.findings.length} findings)`);
-    return { ok: true, result: { file, slug, findings: review.findings.length } };
+    return {
+        ok: true,
+        result: {
+            file,
+            slug,
+            findings: review.findings.length,
+            replaced,
+            renamedFrom: slug === preferred ? undefined : preferred,
+        },
+    };
 }
 
 /**
@@ -301,9 +317,7 @@ async function importReview(payload = {}) {
         record.slug = slug;
         try {
             if (replacing) {
-                const tmp = `${file}.tmp`;
-                fs.writeFileSync(tmp, JSON.stringify(record, null, 2), "utf8");
-                fs.renameSync(tmp, file);
+                atomic.writeJson(file, record);
             } else {
                 fs.writeFileSync(file, JSON.stringify(record, null, 2), {
                     encoding: "utf8",

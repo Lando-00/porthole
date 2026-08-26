@@ -86,3 +86,56 @@ test("workspace-add changes only the addressed mock window", () => {
     assert.deepEqual(result.folders, ["C:\\Users\\me\\.copilot\\session-state\\abc"]);
     assert.equal(folders.length, 2);
 });
+
+test("a slow route does not hold up the requests behind it", async () => {
+    // `preview` parks on an Apply/Cancel notification until the user answers.
+    // While the inbox dispatched serially, that single unanswered toast left
+    // every later request unclaimed and unacked, so the CLI timed out on all of
+    // them and reported a perfectly healthy window as dead - `ping` included.
+    const windowId = "fedcba0987654321";
+    const slowId = `${Date.now()}-slow`;
+    const quickId = `${Date.now()}-quick`;
+
+    let releaseSlow;
+    const slowStarted = new Promise((resolve) => {
+        releaseSlow = resolve;
+    });
+    let unblock;
+    const held = new Promise((resolve) => {
+        unblock = resolve;
+    });
+
+    const subscription = inbox.start(windowId, async (request) => {
+        if (request.requestId === slowId) {
+            releaseSlow();
+            await held; // still "showing the notification"
+        }
+        transport.writeAck(request.requestId, { ok: true, result: { id: request.requestId } });
+    });
+
+    const dir = inbox.inboxDir(windowId);
+    const put = (requestId, route) => {
+        const file = path.join(dir, `${requestId}.json`);
+        fs.writeFileSync(`${file}.tmp`, JSON.stringify({ requestId, route, payload: null }), "utf8");
+        fs.renameSync(`${file}.tmp`, file);
+    };
+
+    put(slowId, "preview");
+    await slowStarted; // the slow route is now parked mid-flight
+
+    put(quickId, "ping");
+    const quickAck = path.join(os.tmpdir(), "porthole", "ack", `${quickId}.json`);
+    await waitFor(quickAck, 3000); // must not wait on the slow one
+
+    assert.equal(JSON.parse(fs.readFileSync(quickAck, "utf8")).ok, true);
+    fs.rmSync(quickAck, { force: true });
+
+    // The slow request still completes normally once the user answers.
+    unblock();
+    const slowAck = path.join(os.tmpdir(), "porthole", "ack", `${slowId}.json`);
+    await waitFor(slowAck, 3000);
+    assert.equal(JSON.parse(fs.readFileSync(slowAck, "utf8")).ok, true);
+    fs.rmSync(slowAck, { force: true });
+
+    subscription.dispose();
+});

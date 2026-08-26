@@ -27,7 +27,7 @@ import {
     writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir, homedir, uptime } from "node:os";
 import { basename, join } from "node:path";
 
 import { config, copilotHome } from "./config.mjs";
@@ -48,7 +48,33 @@ const MAX_AGE_MS = 60 * 60 * 1000;
 // Litter is bounded by MAX_AGE_MS, so sweeping on every single request buys
 // nothing and costs a readdir plus a stat per leftover file each time.
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+// A sleep that overruns its timer by more than this was the machine suspending
+// or the wall clock moving, not the companion being slow.
+const SUSPEND_THRESHOLD_MS = 5000;
 const WINDOW_ID = /^[a-f0-9]{16}$/;
+// Anything written before this machine last booted was written by a process
+// that is definitively gone, whatever the pid says now.
+const BOOT_SLACK_MS = 60 * 1000;
+
+/**
+ * When this machine booted, give or take.
+ *
+ * A pid probe alone cannot spot a presence file left by a hard power-off: after
+ * a reboot the pid it names may have been handed to an unrelated process, and
+ * an unelevated probe of one of those answers EPERM, which is deliberately read
+ * as "alive". The stale record then never expires, and a window that reopens
+ * the same Copilot session looks like a second live owner - so every route
+ * refuses as ambiguous, permanently, with nothing to clear it.
+ */
+function bootedAt() {
+    return Date.now() - uptime() * 1000;
+}
+
+function writtenBeforeBoot(info) {
+    const written = Date.parse(info.updatedAt);
+    if (!Number.isFinite(written)) return false; // no evidence; leave it alone
+    return written < bootedAt() - BOOT_SLACK_MS;
+}
 
 const EXTENSION_ID = "lando-00.porthole-companion";
 
@@ -117,6 +143,17 @@ export function findCompanions() {
             continue;
         }
         if (!info.pid) continue;
+
+        // Checked before the pid probe, because a recycled pid can make the
+        // probe say "alive" about a process that died with the last boot.
+        if (writtenBeforeBoot(info)) {
+            rmSync(file, { force: true });
+            if (WINDOW_ID.test(String(info.windowId || ""))) {
+                rmSync(join(inboxRoot(), info.windowId), { recursive: true, force: true });
+            }
+            continue;
+        }
+
         // ESRCH means the window is gone; EPERM means it exists but is not
         // ours to signal, which happens when one side runs elevated. Deleting
         // on EPERM would hide a perfectly healthy window.
@@ -466,7 +503,7 @@ function fire(exe, uri) {
 async function waitForAck(requestId, timeoutMs) {
     const name = `${requestId}.json`;
     const file = join(ACK_DIR, name);
-    const deadline = Date.now() + timeoutMs;
+    let deadline = Date.now() + timeoutMs;
 
     let wake = null;
     let watcher = null;
@@ -500,10 +537,22 @@ async function waitForAck(requestId, timeoutMs) {
             const remaining = deadline - Date.now();
             if (remaining <= 0) return null;
 
-            await napUntilWoken(Math.min(interval, remaining), (resume) => {
+            const nap = Math.min(interval, remaining);
+            const before = Date.now();
+            await napUntilWoken(nap, (resume) => {
                 wake = resume;
             });
             wake = null;
+
+            // Time the machine spent suspended is not time the companion had to
+            // answer in. A preview waits half an hour for a human to click
+            // Apply; closing the lid in the middle used to burn that whole
+            // budget at once, so the CLI reported a timeout while the editor was
+            // still showing the diff - and then Apply wrote files that the model
+            // had already been told were never applied.
+            const slept = Date.now() - before;
+            if (slept > nap + SUSPEND_THRESHOLD_MS) deadline += slept - nap;
+
             interval = Math.min(interval * POLL_GROWTH, POLL_MAX_MS);
         }
     } finally {

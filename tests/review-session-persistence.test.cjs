@@ -33,7 +33,7 @@ function writeReview(session, slug, overrides = {}) {
     return file;
 }
 
-function loadReviews({ session, warningAnswer } = {}) {
+function loadReviews({ session, warningAnswer, annotationEntries = [] } = {}) {
     const annotationsApplied = [];
     const warnings = [];
     const mocks = new Map([
@@ -53,7 +53,7 @@ function loadReviews({ session, warningAnswer } = {}) {
             sessionRoot: () => path.dirname(session.dir),
         }],
         [path.join(SRC, "annotations.js"), {
-            getState: () => ({ entries: [], title: null }),
+            getState: () => ({ entries: annotationEntries, title: null }),
             annotate: async (payload) => annotationsApplied.push(payload),
         }],
         [path.join(SRC, "tour.js"), {
@@ -180,6 +180,46 @@ test("deleting a Saved Review is confirmed and scoped to the current session", a
         assert.equal(fs.existsSync(currentFile), false);
         assert.equal(fs.readFileSync(siblingFile, "utf8"), siblingBefore);
         assert.match(loaded.warnings[0].message, /shared-review/);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("saving a review twice never overwrites the first one", () => {
+    // defaultTitle() falls back to the literal "review", so two untitled saves
+    // in one session both wanted review.json. The second used to overwrite the
+    // first, destroying hand-written findings with no warning at all.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-review-save-"));
+    const current = { id: "session-current", dir: path.join(root, "session-current") };
+    try {
+        const loaded = loadReviews({
+            session: current,
+            annotationEntries: [
+                { file: "C:\\repo\\a.js", startLine: 1, endLine: 1, severity: "info", message: "first" },
+            ],
+        });
+
+        const first = loaded.reviews.save({});
+        assert.equal(first.ok, true);
+        assert.equal(first.result.slug, "review");
+
+        const second = loaded.reviews.save({});
+        assert.equal(second.ok, true);
+        assert.notEqual(second.result.slug, first.result.slug, "the second save must not reuse the slug");
+        assert.equal(second.result.renamedFrom, "review");
+
+        // Both files exist, and the first still holds its own findings.
+        assert.equal(fs.existsSync(first.result.file), true);
+        assert.equal(fs.existsSync(second.result.file), true);
+        assert.deepEqual(
+            loaded.reviews.list({}).result.reviews.map((r) => r.slug).sort(),
+            [first.result.slug, second.result.slug].sort(),
+        );
+
+        // Overwriting is still possible, but only when explicitly asked for.
+        const replaced = loaded.reviews.save({ slug: "review", replace: true });
+        assert.equal(replaced.result.slug, "review");
+        assert.equal(replaced.result.replaced, true);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
