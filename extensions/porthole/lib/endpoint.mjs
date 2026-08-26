@@ -118,6 +118,19 @@ export function remove() {
     } catch {
         // ignore
     }
+    // Removed with the presence file, not after it. A reader only knows an
+    // outbox is abandoned by finding a cli-*.json whose pid is dead, so
+    // deleting the presence file on a clean exit and leaving the directory
+    // stranded it permanently - and it can hold the user's selected source
+    // code, in their home directory, forever.
+    try {
+        rmSync(join(copilotHome(), "porthole", "outbox", ENDPOINT_ID), {
+            recursive: true,
+            force: true,
+        });
+    } catch {
+        // ignore
+    }
 }
 
 /**

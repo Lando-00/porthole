@@ -34,6 +34,9 @@ const ACK_TIMEOUT_MS = 8000;
 const ACK_POLL_MIN_MS = 25;
 const ACK_POLL_MAX_MS = 250;
 const ACK_POLL_GROWTH = 1.3;
+// Long enough that a session still writing its first presence file cannot have
+// its outbox mistaken for an abandoned one.
+const ORPHAN_GRACE_MS = 5 * 60 * 1000;
 
 function copilotHome() {
     const configured = process.env.COPILOT_HOME;
@@ -116,8 +119,44 @@ function findEndpoints() {
         found.push(info);
     }
 
+    sweepOrphanedOutboxes(dir, found);
     sweepAcks();
     return found.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+}
+
+/**
+ * Removes outbox directories no live session can ever read again.
+ *
+ * The pruning above only fires when a dead session's presence file is still
+ * there to be found. A session that exited cleanly deletes its own, and older
+ * builds left the directory behind regardless - so without this, abandoned
+ * outboxes accumulate in the user's home directory, each potentially holding a
+ * selection of their source code.
+ *
+ * Only directories older than the grace period are touched, so a session that
+ * is still starting up cannot have its outbox pulled out from under it.
+ */
+function sweepOrphanedOutboxes(dir, live) {
+    const root = path.join(dir, "outbox");
+    let entries;
+    try {
+        entries = fs.readdirSync(root);
+    } catch {
+        return;
+    }
+
+    const known = new Set(live.map((info) => info.endpointId));
+    for (const entry of entries) {
+        if (known.has(entry)) continue;
+        const candidate = path.join(root, entry);
+        try {
+            if (fs.existsSync(path.join(dir, `cli-${entry}.json`))) continue;
+            if (Date.now() - fs.statSync(candidate).mtimeMs < ORPHAN_GRACE_MS) continue;
+            discard(candidate);
+        } catch {
+            // racing another window's prune is fine
+        }
+    }
 }
 
 function discard(dir) {
