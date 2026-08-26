@@ -2,7 +2,7 @@
   "name": "porthole-companion",
   "displayName": "porthole companion",
   "description": "Session-aware VS Code companion for Copilot CLI: walkthroughs, annotations, editable change previews, exact-window routing, Problems, and selections sent back.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "Lando-00",
   "license": "MIT",
   "icon": "icon.png",

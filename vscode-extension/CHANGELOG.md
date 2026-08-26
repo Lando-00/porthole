@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.1
+
+Performance and stalls.
+
+Selections sent to the CLI are picked up in about 4ms instead of waiting up to
+a second. A saved tour is restored as soon as the workspace is ready rather
+than always 1.5 seconds after the window opens. The heartbeat is no longer
+rewritten when the window loses focus, and two Tasks refreshes at once no
+longer each start a `node` process to read the session database.
+
+Fixes:
+
+- Falling back to a text search for a symbol is now bounded by time as well as
+  file count, and shares one budget across every workspace folder, so it can no
+  longer freeze the window on a large project.
+- Waiting for a lazy language service is retried on a short ladder under a
+  single deadline, instead of a flat 700ms wait that could overrun the CLI's
+  own timeout and move the cursor after the request had been given up on.
+- Each symbol lookup leaked a timer.
+
 ## 1.0.0
 
 **One Copilot session, one Porthole window, one owned artifact library.**
