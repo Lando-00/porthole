@@ -23,6 +23,7 @@ import {
     renameSync,
     rmSync,
     statSync,
+    watch,
     writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -36,8 +37,17 @@ import { connectedIdes, pathsRelated, resolveEditorExe, resolveEditorTarget, whi
 const ROOT = join(tmpdir(), "porthole");
 const REQ_DIR = join(ROOT, "req");
 const ACK_DIR = join(ROOT, "ack");
-const POLL_INTERVAL_MS = 10;
+// The ack poll starts tight and backs off. Almost every ack lands in the first
+// few tens of milliseconds, so a small first interval is what actually decides
+// how responsive a route feels; a fixed 10ms then spends the rest of a failing
+// request doing a hundred pointless existsSync calls a second.
+const POLL_MIN_MS = 2;
+const POLL_MAX_MS = 50;
+const POLL_GROWTH = 1.4;
 const MAX_AGE_MS = 60 * 60 * 1000;
+// Litter is bounded by MAX_AGE_MS, so sweeping on every single request buys
+// nothing and costs a readdir plus a stat per leftover file each time.
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 const WINDOW_ID = /^[a-f0-9]{16}$/;
 
 const EXTENSION_ID = "lando-00.porthole-companion";
@@ -51,8 +61,14 @@ function ensureDirs() {
     mkdirSync(ACK_DIR, { recursive: true });
 }
 
+let lastSweptAt = 0;
+
 /** Nothing here is read twice, so old files are just litter. */
-function sweep() {
+function sweep({ force = false } = {}) {
+    const now = Date.now();
+    if (!force && now - lastSweptAt < SWEEP_INTERVAL_MS) return;
+    lastSweptAt = now;
+
     const cutoff = Date.now() - MAX_AGE_MS;
     for (const dir of [REQ_DIR, ACK_DIR]) {
         let entries;
@@ -437,27 +453,82 @@ function fire(exe, uri) {
     }
 }
 
+/**
+ * Waits for the companion's reply.
+ *
+ * Watched *and* polled. The watcher is what makes a reply feel immediate:
+ * polling alone cannot beat the host timer granularity, which on Windows
+ * rounds any sleep up to roughly 15ms and so put a floor under every route.
+ * The poll stays because fs.watch is not reliable everywhere - network and
+ * virtualised filesystems drop events - and a missed event must degrade to a
+ * slower answer, never a lost one.
+ */
 async function waitForAck(requestId, timeoutMs) {
-    const file = join(ACK_DIR, `${requestId}.json`);
+    const name = `${requestId}.json`;
+    const file = join(ACK_DIR, name);
     const deadline = Date.now() + timeoutMs;
 
-    while (Date.now() < deadline) {
-        if (existsSync(file)) {
-            try {
-                const parsed = JSON.parse(readFileSync(file, "utf8"));
-                rmSync(file, { force: true });
-                return parsed;
-            } catch {
-                // Half-written despite the atomic rename; try again next tick.
-            }
-        }
-        await sleep(POLL_INTERVAL_MS);
+    let wake = null;
+    let watcher = null;
+    try {
+        watcher = watch(ACK_DIR, { persistent: false }, (_event, changed) => {
+            // Some platforms report no filename; waking for those is cheap.
+            if (!changed || String(changed).startsWith(requestId)) wake?.();
+        });
+        if (typeof watcher.on === "function") watcher.on("error", () => {});
+    } catch {
+        watcher = null; // polling alone still answers, just less promptly
     }
-    return null;
+
+    try {
+        let interval = POLL_MIN_MS;
+        for (;;) {
+            // Checked before the first sleep, which closes the race where the
+            // reply lands between firing the request and watching for it.
+            if (existsSync(file)) {
+                try {
+                    const parsed = JSON.parse(readFileSync(file, "utf8"));
+                    rmSync(file, { force: true });
+                    return parsed;
+                } catch {
+                    // Half-written despite the atomic rename; the rest of it is
+                    // milliseconds away, so do not back off for it.
+                    interval = POLL_MIN_MS;
+                }
+            }
+
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) return null;
+
+            await napUntilWoken(Math.min(interval, remaining), (resume) => {
+                wake = resume;
+            });
+            wake = null;
+            interval = Math.min(interval * POLL_GROWTH, POLL_MAX_MS);
+        }
+    } finally {
+        wake = null;
+        try {
+            if (watcher) watcher.close();
+        } catch {
+            // Already closed.
+        }
+    }
 }
 
-function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+/** Sleeps for `ms`, or until `register`'s callback is invoked, whichever is first. */
+function napUntilWoken(ms, register) {
+    return new Promise((resolve) => {
+        let done = false;
+        const finish = () => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            resolve();
+        };
+        const timer = setTimeout(finish, ms);
+        register(finish);
+    });
 }
 
 /** Human-readable reason a companion call failed, for logging. */

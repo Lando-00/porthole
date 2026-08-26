@@ -261,10 +261,27 @@ function readViaNode(dbPath, extensionUri) {
 /**
  * Reads the todo list, host SQLite first and a spawned node second.
  * Returns null when neither route works, so the view can say why.
+ *
+ * Concurrent reads of the same database share one attempt. Focus changes and
+ * view-visibility changes both refresh the Tasks view, so without this a single
+ * alt-tab could spawn the `node` fallback more than once for the same answer.
  */
+const inFlight = new Map();
+
 async function readTodos(dbPath, extensionUri) {
     if (!dbPath) return null;
-    return readViaHost(dbPath) || (await readViaNode(dbPath, extensionUri));
+
+    const hosted = readViaHost(dbPath);
+    if (hosted) return hosted;
+
+    const existing = inFlight.get(dbPath);
+    if (existing) return existing;
+
+    const attempt = readViaNode(dbPath, extensionUri).finally(() => {
+        inFlight.delete(dbPath);
+    });
+    inFlight.set(dbPath, attempt);
+    return attempt;
 }
 
 module.exports = {

@@ -28,7 +28,12 @@ const MAX_SELECTION = 16 * 1024;
 const MAX_MESSAGE = 32 * 1024;
 const MAX_NOTE = 2000;
 const ACK_TIMEOUT_MS = 8000;
-const ACK_POLL_MS = 50;
+// The CLI polls its outbox once a second, so an ack cannot arrive sooner than
+// that; poll tightly around the expected arrival and then back off rather than
+// checking 160 times over the full timeout.
+const ACK_POLL_MIN_MS = 25;
+const ACK_POLL_MAX_MS = 250;
+const ACK_POLL_GROWTH = 1.3;
 
 function copilotHome() {
     const configured = process.env.COPILOT_HOME;
@@ -322,17 +327,28 @@ async function reportDelivery(message, endpoint) {
 async function waitForAck(messageId) {
     const file = path.join(ackDir(), `${safeId(messageId)}.json`);
     const deadline = Date.now() + ACK_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-        try {
-            const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-            fs.rmSync(file, { force: true });
-            return parsed;
-        } catch {
-            // not there yet, or half-written
+    let interval = ACK_POLL_MIN_MS;
+
+    for (;;) {
+        // Guarded rather than caught: without this, a wait that goes the full
+        // distance throws and swallows an ENOENT on every single tick, on the
+        // thread that also draws the editor.
+        if (fs.existsSync(file)) {
+            try {
+                const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+                fs.rmSync(file, { force: true });
+                return parsed;
+            } catch {
+                interval = ACK_POLL_MIN_MS; // half-written; the rest is imminent
+            }
         }
-        await new Promise((resolve) => setTimeout(resolve, ACK_POLL_MS));
+
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return null;
+
+        await new Promise((resolve) => setTimeout(resolve, Math.min(interval, remaining)));
+        interval = Math.min(interval * ACK_POLL_GROWTH, ACK_POLL_MAX_MS);
     }
-    return null;
 }
 
 function activate(context) {

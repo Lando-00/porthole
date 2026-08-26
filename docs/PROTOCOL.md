@@ -99,7 +99,7 @@ Normal requests use the addressed inbox:
 2. CLI writes   ~/.copilot/porthole/inbox/<windowId>/<requestId>.json atomically
 3. that window  consumes the request and dispatches its route
 4. companion writes <tmp>/porthole/ack/<requestId>.json
-5. CLI polls the ack every 10ms until companionTimeoutMs, then DELETES it
+5. CLI watches and polls for the ack until companionTimeoutMs, then DELETES it
 ```
 
 The request file contains `{ requestId, route, payload }`. Each companion
@@ -114,7 +114,7 @@ The URI path remains for manual URIs and old companions:
 2. CLI fires    <scheme>://lando-00.porthole-companion/<route>?req=<requestId>
 3. companion reads and DELETES the payload
 4. companion writes <tmp>/porthole/ack/<requestId>.json
-5. CLI polls the ack every 10ms until companionTimeoutMs, then DELETES it
+5. CLI watches and polls for the ack until companionTimeoutMs, then DELETES it
 ```
 
 `<scheme>` is `vscode` or `vscode-insiders` and **must match the build the
@@ -143,6 +143,23 @@ action omit it. Anything a tool needs to return to the model goes here, not in
 
 Acks are written to `<file>.tmp` and renamed, so a reader never sees a
 half-written ack.
+
+### Waiting for an ack
+
+The CLI watches the ack directory and polls it on a widening interval, rather
+than spinning at a fixed one. The watcher supplies the responsiveness; the poll
+is the fallback, because `fs.watch` drops events on some filesystems and a
+missed event must mean a slower answer, never a lost one. This matters most for
+`preview`, which waits up to 30 minutes for a human to click Apply or Cancel.
+
+**An ack on disk always wins, even past the deadline.** The wait looks for the
+file before it checks the clock, so a reply that has already been written is
+reported as the result rather than as a `timeout`. The ack file is the
+companion's own evidence that it did the work; calling that a timeout would be
+the exact "reported success it could not verify" failure, only inverted — and it
+would leave the user's editor changed while the model was told nothing had
+happened. A fixed-interval loop that re-tested the clock first could drop an ack
+that landed during its final sleep.
 
 ### `reason` values
 
@@ -542,8 +559,8 @@ Detecting this is the whole point — a clear refusal beats a silent timeout.
 ```
 1. companion resolves the target endpoint from cli-<endpointId>.json
 2. companion writes  outbox/<endpointId>/<messageId>.json.tmp  then RENAMES it
-3. CLI polls its own outbox, and CLAIMS a message by renaming it into
-   outbox/<endpointId>/inflight/<messageId>.json
+3. CLI watches and polls its own outbox, and CLAIMS a message by renaming it
+   into outbox/<endpointId>/inflight/<messageId>.json
 4. CLI awaits session.send({ prompt, mode })
 5. CLI writes outbox-ack/<messageId>.json, then deletes the inflight file
 6. companion polls for the ack and reports the outcome
@@ -601,6 +618,12 @@ arrived.
 what actually happened rather than what was attempted. Enqueue is the default
 so a message never interrupts a turn already in flight.
 
+The await is bounded. Only one delivery pass runs at a time, so a send that
+never settles would otherwise hold that pass open for the rest of the session
+and leave every later selection unclaimed and unacked. An elapsed send is acked
+`unconfirmed` — the message is never handed to `send` a second time, so
+at-most-once still holds.
+
 > The SDK forbids calling `session.send()` synchronously from
 > `onUserPromptSubmitted`. porthole sends from a timer, which is safe.
 
@@ -621,7 +644,7 @@ so a message never interrupts a turn already in flight.
 | `rejected` | Malformed, or failed validation | The reason, as an error |
 | `rate-limited` | Too many messages this minute | "Slow down" — try again |
 | `expired` | Older than the TTL when found | "Not delivered" |
-| `unconfirmed` | Claimed, outcome unknown after a crash | "May or may not have arrived" |
+| `unconfirmed` | Claimed, outcome unknown after a crash or a send that never completed | "May or may not have arrived" |
 
 **Every consumed message gets an ack**, including rejected, rate-limited and
 expired ones. A dropped message that is only written to a log the user never

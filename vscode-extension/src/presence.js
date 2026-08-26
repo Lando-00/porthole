@@ -159,7 +159,13 @@ function start(vscode, context, version, contract = {}) {
     write(vscode, version, contract);
 
     context.subscriptions.push(
-        vscode.window.onDidChangeWindowState(() => write(vscode, version, contract)),
+        // Only on focus. The contents cannot change on the way *out* of a
+        // window, so writing then just doubled the heartbeat traffic of every
+        // alt-tab. Freshness on the window actually being used is what the
+        // newest-first readers need, and handling a request republishes too.
+        vscode.window.onDidChangeWindowState((event) => {
+            if (event.focused) write(vscode, version, contract);
+        }),
         vscode.workspace.onDidChangeWorkspaceFolders(() => write(vscode, version, contract)),
         { dispose: remove },
     );

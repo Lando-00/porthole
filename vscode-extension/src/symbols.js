@@ -14,6 +14,13 @@ const fs = require("node:fs");
 const { diag } = require("./log");
 
 const PROVIDER_TIMEOUT_MS = 3000;
+// Waits between retries when a language service is still loading its project.
+const SYMBOL_RETRY_MS = [120, 250, 500];
+// Ceiling for one expansion, retries and provider calls together. Kept under
+// the shortest deadline a caller gives the symbol route (6s in annotate.mjs),
+// so the companion stops working when the CLI stops listening rather than
+// moving the cursor after the request was already reported as timed out.
+const EXPAND_BUDGET_MS = 5000;
 
 /** Directories never worth scanning in the text fallback. */
 const IGNORED_DIRS = new Set([
@@ -33,10 +40,18 @@ const MAX_SCAN_FILES = 4000;
 
 /** A cold language server must never hang the ack. */
 function withTimeout(promise, ms, fallback) {
+    let timer = null;
+    // The timer is cleared on settle. Left dangling, every symbol lookup pinned
+    // a timer in the extension host for the full timeout after it had already
+    // answered.
     return Promise.race([
         Promise.resolve(promise).catch(() => fallback),
-        new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
-    ]);
+        new Promise((resolve) => {
+            timer = setTimeout(() => resolve(fallback), ms);
+        }),
+    ]).finally(() => {
+        if (timer) clearTimeout(timer);
+    });
 }
 
 /**
@@ -198,9 +213,12 @@ function escapeRegExp(value) {
 
 async function fromTextScan(query, payload) {
     const hits = [];
+    // Compiled once for the whole scan. Rebuilding seven regexes for every file
+    // that merely contains the word was the bulk of the cost on a large tree.
+    const patterns = definitionPatterns(query);
 
     for (const folder of vscode.workspace.workspaceFolders || []) {
-        scanDir(folder.uri.fsPath, query, hits, { count: 0 });
+        scanDir(folder.uri.fsPath, query, hits, { count: 0 }, patterns);
     }
 
     const filtered = payload.file ? hits.filter((h) => h.file.endsWith(payload.file)) : hits;
@@ -252,7 +270,7 @@ async function fromTextScan(query, payload) {
     };
 }
 
-function scanDir(dir, query, hits, budget) {
+function scanDir(dir, query, hits, budget, patterns) {
     let entries;
     try {
         entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -268,7 +286,7 @@ function scanDir(dir, query, hits, budget) {
 
         if (entry.isDirectory()) {
             if (IGNORED_DIRS.has(entry.name)) continue;
-            scanDir(full, query, hits, budget);
+            scanDir(full, query, hits, budget, patterns);
             continue;
         }
         if (!entry.isFile()) continue;
@@ -292,7 +310,6 @@ function scanDir(dir, query, hits, budget) {
         if (text.includes("\u0000")) continue; // binary
         if (!text.includes(query)) continue;
 
-        const patterns = definitionPatterns(query);
         const lines = text.split(/\r?\n/);
         for (let i = 0; i < lines.length; i += 1) {
             for (let p = 0; p < patterns.length; p += 1) {
@@ -324,13 +341,30 @@ async function expand(uri, narrow, name) {
         return narrow;
     }
 
-    let documentSymbols = await documentSymbolsFor(uri);
+    // One deadline for the whole attempt, retries included. Each provider call
+    // gets only what is left of it.
+    //
+    // Without this the retries compound: four calls that can each sit on the
+    // provider timeout add up to far longer than the CLI waits for the request,
+    // so the companion would still be working - and would eventually move the
+    // user's cursor - after the CLI had already reported a timeout.
+    const deadline = Date.now() + EXPAND_BUDGET_MS;
+
+    let documentSymbols = await documentSymbolsFor(uri, deadline - Date.now());
     if (!documentSymbols) {
         // The project may only just have started loading because of the open
-        // above; one retry is the difference between a whole function and a
+        // above; a retry is the difference between a whole function and a
         // single line.
-        await delay(700);
-        documentSymbols = await documentSymbolsFor(uri);
+        //
+        // Retried on a short backoff rather than after a flat 700ms wait, so a
+        // provider that answers quickly is not made to wait for the worst case.
+        for (const wait of SYMBOL_RETRY_MS) {
+            const remaining = deadline - Date.now();
+            if (remaining <= wait) break;
+            await delay(wait);
+            documentSymbols = await documentSymbolsFor(uri, deadline - Date.now());
+            if (documentSymbols) break;
+        }
     }
     if (!documentSymbols) return narrow;
 
@@ -347,10 +381,12 @@ async function expand(uri, narrow, name) {
     return node ? node.range : narrow;
 }
 
-async function documentSymbolsFor(uri) {
+async function documentSymbolsFor(uri, budgetMs = PROVIDER_TIMEOUT_MS) {
+    const allowed = Math.min(PROVIDER_TIMEOUT_MS, budgetMs);
+    if (allowed <= 0) return null;
     const result = await withTimeout(
         vscode.commands.executeCommand("vscode.executeDocumentSymbolProvider", uri),
-        PROVIDER_TIMEOUT_MS,
+        allowed,
         null,
     );
     return result && result.length > 0 ? result : null;

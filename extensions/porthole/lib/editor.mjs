@@ -55,8 +55,27 @@ const EDITOR_ALIASES = {
  * which cmd.exe cannot run - it is there for Git Bash. Anything with a PATHEXT
  * extension is preferred, or the launch fails with "not recognized as an
  * internal or external command".
+ *
+ * Successful lookups are memoised: this spawns a process, `where` is slow on
+ * Windows, and one /cops or /porthole can ask about several editor names.
+ *
+ * A miss is deliberately NOT cached. "No editor found" is the answer a user is
+ * most likely to go and fix, and /porthole is the command they run to check -
+ * so caching it would make the diagnostic keep reporting a problem the user had
+ * already solved. Re-probing costs a spawn only when there is nothing to find.
  */
+const launcherCache = new Map();
+
 export function whichEditor(name) {
+    const cached = launcherCache.get(name);
+    if (cached) return cached;
+
+    const found = probeEditor(name);
+    if (found) launcherCache.set(name, found);
+    return found;
+}
+
+function probeEditor(name) {
     const probe = isWindows ? "where" : "which";
     try {
         const out = execFileSync(probe, [name], {

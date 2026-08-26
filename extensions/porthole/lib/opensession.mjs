@@ -26,6 +26,13 @@ import { projectRoot } from "./git.mjs";
 const DRY_WORDS = new Set(["dry", "dry-run", "dryrun", "show", "preview"]);
 const NO_PLAN_WORDS = new Set(["noplan", "no-plan"]);
 
+// How long to wait for a freshly launched window to publish its presence, and
+// how often to look. The budget is unchanged from the original twelve one-second
+// ticks; only the granularity is finer, so a window that comes up quickly is
+// noticed quickly instead of being rounded up to the next second.
+const COMPANION_WAIT_MS = 12_000;
+const COMPANION_POLL_MS = 200;
+
 /** Parses `/cops dry noplan` and friends. Unknown words are reported, not ignored. */
 export function parseArgs(raw) {
     const words = String(raw || "").trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -628,8 +635,12 @@ export async function openSession(session, ctx, options = {}) {
 async function noteIfNothingCameUp(plan) {
     // Enough for the window to start and the extension host to publish, but not
     // so long that /cops feels slow when something is genuinely wrong.
-    for (let i = 0; i < 12; i += 1) {
-        await new Promise((r) => setTimeout(r, 1000));
+    //
+    // Checked before the first sleep and polled several times a second, because
+    // sleeping first charged every successful /cops a full second it never
+    // needed, and a one-second tick then rounded the answer up on top of that.
+    const deadline = Date.now() + COMPANION_WAIT_MS;
+    for (;;) {
         if (
             findCompanions().some((companion) =>
                 companionHasSession(companion, plan.sessionId, plan.sessionFolder),
@@ -637,6 +648,9 @@ async function noteIfNothingCameUp(plan) {
         ) {
             return "";
         }
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) break;
+        await new Promise((r) => setTimeout(r, Math.min(COMPANION_POLL_MS, remaining)));
     }
 
     const parent = plan.sessionFolder ? dirname(plan.sessionFolder) : null;

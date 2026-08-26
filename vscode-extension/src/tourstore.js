@@ -37,6 +37,15 @@ const SLUG_PATTERN = /^[\w-]{1,64}$/;
  */
 const SAVE_DEBOUNCE_MS = 750;
 
+/**
+ * Backoff for the startup tour restore, in milliseconds between attempts.
+ *
+ * Covers the same window the old flat 1500ms wait did, but without charging it
+ * to the overwhelmingly common case where the workspace folders are already
+ * there when the extension host activates.
+ */
+const RESTORE_RETRY_MS = [150, 350, 1000, 2000];
+
 const pending = new Map();
 
 // --- paths ------------------------------------------------------------------
@@ -861,13 +870,33 @@ function activateExtension(context) {
 
     // Deferred: findSession reads the workspace folders, which are not settled
     // at the instant activation runs.
-    setTimeout(() => {
+    //
+    // Tried immediately and then retried, rather than sleeping a flat second
+    // and a half. restore() is idempotent and only does real work once a
+    // session folder is visible, so the common case - folders already settled -
+    // costs nothing, and a workspace that settles late is still picked up.
+    let attempt = 0;
+    let restoreTimer = null;
+    const tryRestore = () => {
+        restoreTimer = null;
+        let found = false;
         try {
-            restore();
+            found = Boolean(findWorkspaceSession());
+            if (found) restore();
         } catch (err) {
             diag(`tour restore failed: ${err.message}`);
+            found = true; // a failing restore is not worth retrying in a loop
         }
-    }, 1500);
+        attempt += 1;
+        if (found || attempt > RESTORE_RETRY_MS.length) return;
+        restoreTimer = setTimeout(tryRestore, RESTORE_RETRY_MS[attempt - 1]);
+    };
+    tryRestore();
+    context.subscriptions.push({
+        dispose: () => {
+            if (restoreTimer) clearTimeout(restoreTimer);
+        },
+    });
 }
 
 /** A tour id, from either a bare string or the tree node the menu passes. */

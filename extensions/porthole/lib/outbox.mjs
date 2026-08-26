@@ -25,6 +25,7 @@ import {
     renameSync,
     rmSync,
     statSync,
+    watch,
     writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -34,11 +35,42 @@ import { endpointId, portholeHome } from "./endpoint.mjs";
 
 const POLL_MS = 1000;
 const TTL_MS = 10 * 60 * 1000;
+// The sweeps only ever act on files older than TTL_MS, so running them on every
+// poll spent two extra directory scans a second, for the life of the session,
+// to discover nothing.
+const SWEEP_INTERVAL_MS = 60 * 1000;
+// A send that never settles must not be able to hold the single delivery pass
+// open for the rest of the session. Generous, because a slow send is normal and
+// a give-up is reported as "unconfirmed" rather than as a failure.
+const SEND_TIMEOUT_MS = 30 * 1000;
 const MAX_BYTES = 32 * 1024;
 const MAX_PER_MINUTE = 10;
 
+const TIMED_OUT = Symbol("timed out");
+
+/** Resolves with TIMED_OUT if `promise` has not settled within `ms`. */
+function withDeadline(promise, ms) {
+    let timer = null;
+    return Promise.race([
+        Promise.resolve(promise),
+        new Promise((resolve) => {
+            timer = setTimeout(() => resolve(TIMED_OUT), ms);
+            // Like the poll timer: waiting on a send must never be the reason
+            // the CLI cannot exit.
+            if (typeof timer.unref === "function") timer.unref();
+        }),
+    ]).finally(() => {
+        if (timer) clearTimeout(timer);
+    });
+}
+
 let timer = null;
+let watcher = null;
+let polling = false;
+let pollRequested = false;
+let generation = 0;
 let sendPrompt = null;
+let sendTimeoutMs = SEND_TIMEOUT_MS;
 let logLine = null;
 let recentSends = [];
 
@@ -191,11 +223,24 @@ async function deliver(file) {
         // Awaited, so the ack reflects what happened rather than what was
         // attempted. Enqueue by default: a message should never interrupt a
         // turn that is already running.
-        await sendPrompt({
-            prompt: composePrompt(message),
-            mode: config().sendMode === "immediate" ? "immediate" : "enqueue",
-        });
-        ack(messageId, "accepted");
+        //
+        // Bounded, because only one delivery pass runs at a time: a send that
+        // never settles would otherwise hold the pass open forever and leave
+        // every later selection unclaimed and unacked. `unconfirmed` is the
+        // protocol's existing word for "claimed, outcome unknown", which is
+        // exactly what an elapsed send is. The message is never sent twice.
+        const outcome = await withDeadline(
+            sendPrompt({
+                prompt: composePrompt(message),
+                mode: config().sendMode === "immediate" ? "immediate" : "enqueue",
+            }),
+            sendTimeoutMs,
+        );
+        if (outcome === TIMED_OUT) {
+            ack(messageId, "unconfirmed", "the CLI did not finish sending it in time");
+        } else {
+            ack(messageId, "accepted");
+        }
     } catch (err) {
         ack(messageId, "rejected", err?.message || String(err));
     } finally {
@@ -251,6 +296,21 @@ async function poll() {
         await deliver(claimed);
     }
 
+    maybeSweep();
+}
+
+let lastSweptAt = 0;
+
+/**
+ * Runs the TTL sweeps, but not more often than they can possibly matter.
+ *
+ * The first poll still sweeps, which is what clears anything a previous process
+ * left behind; after that a minute is far finer than the ten-minute TTL needs.
+ */
+function maybeSweep() {
+    const now = Date.now();
+    if (now - lastSweptAt < SWEEP_INTERVAL_MS) return;
+    lastSweptAt = now;
     sweepInflight();
 }
 
@@ -317,6 +377,7 @@ export function start(session, options = {}) {
 
     sendPrompt = options.send || ((payload) => session.send(payload));
     logLine = options.log || ((text) => session.log(text, { ephemeral: true }));
+    sendTimeoutMs = Number(options.sendTimeoutMs) > 0 ? Number(options.sendTimeoutMs) : SEND_TIMEOUT_MS;
 
     const dir = outboxDir();
     if (!ownedByUs(dir)) {
@@ -343,17 +404,72 @@ export function start(session, options = {}) {
         return;
     }
 
-    timer = setInterval(() => {
-        void poll().catch(() => {});
-    }, options.intervalMs || POLL_MS);
+    // Watched and polled. The watcher is what makes "Send to Copilot" feel
+    // immediate - a message used to sit in the outbox for up to a full second
+    // before anything looked at it. The interval stays as a fallback, because
+    // fs.watch drops events on some filesystems and a missed selection must
+    // arrive late rather than never.
+    try {
+        watcher = watch(dir, { persistent: false }, () => kick());
+        if (typeof watcher.on === "function") watcher.on("error", () => {});
+    } catch {
+        watcher = null; // the interval alone still delivers
+    }
+
+    timer = setInterval(kick, options.intervalMs || POLL_MS);
 
     // A polling timer must not be the reason the CLI cannot exit.
     if (typeof timer.unref === "function") timer.unref();
+
+    // Anything written before the watcher existed.
+    kick();
+}
+
+/**
+ * Runs a pass, coalescing concurrent requests into one.
+ *
+ * Two passes must never run at once. Claiming is an atomic rename, so overlap
+ * could not duplicate a delivery, but it could interleave two deliveries and
+ * spend the rate limit twice on the same tick.
+ *
+ * The generation guard is what lets stop() retire a pass that is still in
+ * flight, so a later start() is never blocked by the worker of a previous one.
+ */
+function kick() {
+    pollRequested = true;
+    if (polling) return;
+
+    const mine = generation;
+    polling = true;
+    void (async () => {
+        try {
+            while (pollRequested && mine === generation) {
+                pollRequested = false;
+                await poll();
+            }
+        } catch {
+            // A failed pass must not stop the next one.
+        } finally {
+            if (mine === generation) polling = false;
+        }
+    })();
 }
 
 export function stop() {
     if (timer) clearInterval(timer);
     timer = null;
+    try {
+        if (watcher) watcher.close();
+    } catch {
+        // Already closed.
+    }
+    watcher = null;
+    pollRequested = false;
+    lastSweptAt = 0;
+    // Retires any pass still in flight, so a later start() gets a clean worker
+    // even if the previous one is stuck awaiting a send that never settled.
+    generation += 1;
+    polling = false;
 }
 
 export const internals = { composePrompt, validate, outboxDir, inflightDir, ackDir };

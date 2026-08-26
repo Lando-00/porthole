@@ -44,11 +44,12 @@ function matchesSession(companion, sessionId, sessionPath) {
 
 async function waitForCompanion(timeoutMs, sessionId, sessionPath) {
     const deadline = Date.now() + (Number(timeoutMs) > 0 ? Number(timeoutMs) : WAIT_MS);
-    while (Date.now() < deadline) {
+    for (;;) {
         if (findCompanions().some((c) => matchesSession(c, sessionId, sessionPath))) return true;
-        await new Promise((r) => setTimeout(r, POLL_MS));
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return false;
+        await new Promise((r) => setTimeout(r, Math.min(POLL_MS, remaining)));
     }
-    return findCompanions().some((c) => matchesSession(c, sessionId, sessionPath));
 }
 
 /**
