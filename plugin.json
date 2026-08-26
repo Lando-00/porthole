@@ -1,7 +1,7 @@
 {
   "name": "porthole",
   "description": "Session-aware VS Code windows for Copilot CLI: walkthroughs, annotations, editable change previews, exact focus, diffs, reviews and Problems.",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "author": {
     "name": "Lando-00",
     "url": "https://github.com/Lando-00"

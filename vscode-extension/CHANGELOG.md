@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0
+
+- The heartbeat now publishes `startedAt`, so a Copilot session that owns
+  several windows can tell which came first. The oldest is the primary and
+  answers for the session; later ones are secondaries that still receive
+  annotations, `/goto` and tour display.
+- A request the CLI has stopped waiting for is dropped instead of being acted
+  on, so a command reported as timed out no longer runs a moment later.
+- Running in WSL, a Dev Container or a Codespace is no longer treated as a
+  fault when the editor and the CLI share a filesystem. `porthole: diagnose`
+  reports it as information rather than a failure.
+
 ## 1.0.2
 
 Bug fixes.

@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.1.0
+
+**Porthole now works inside WSL, Dev Containers and Codespaces.** Running the
+CLI in the same environment as VS Code was refused outright, with advice to do
+the thing you were already doing. What actually matters is whether both halves
+see the same filesystem, so that is what is checked now. The genuinely split
+setup — CLI on the host, editor attached to a remote — was already reported as
+"no window running", and still is.
+
+**A Copilot session can own more than one VS Code window.** Opening a second
+window for a session used to disable *every* porthole command for it, not just
+`/cops`. Now the first window is the primary and answers for the session;
+anything you open afterwards joins as a secondary. Annotations, `/goto` and
+tours appear in all of them; anything with a consequence — a change preview,
+adding folders, deleting a tour — happens once, in the primary. Naming a window
+explicitly still targets exactly that one, and a window belonging to a
+*different* session is still refused.
+
+**A command you were told had timed out no longer runs anyway.** If the editor
+picked up a request just as the CLI gave up on it, the command still went ahead
+— so retrying produced two change previews, or added the same folders twice.
+The CLI now tells the window it has stopped waiting, and the window drops the
+request instead of acting on it.
+
 ## 1.0.2
 
 Bug fixes, from an audit of what breaks in ordinary use.
