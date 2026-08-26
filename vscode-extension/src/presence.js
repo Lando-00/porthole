@@ -30,6 +30,11 @@ const { diag } = require("./log");
 // One address per extension-host lifetime. Do not derive this from the pid:
 // pids can be reused, while the inbox is deliberately addressed by windowId.
 const WINDOW_ID = crypto.randomBytes(8).toString("hex");
+// Fixed for this extension host's lifetime, unlike `updatedAt`, which is
+// refreshed on every handled request. It is what lets a session that owns more
+// than one window say which came first: the oldest is the primary, and a window
+// forced afterwards is a secondary.
+const STARTED_AT = new Date().toISOString();
 let findWorkspaceSession = null;
 
 function copilotHome() {
@@ -103,6 +108,7 @@ function describe(vscode, version, contract = {}) {
         // outside, because it is the one capability that varies by build.
         hostSqlite: hasHostSqlite(),
         workspaceFolders: (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath),
+        startedAt: STARTED_AT,
         updatedAt: new Date().toISOString(),
     };
 }

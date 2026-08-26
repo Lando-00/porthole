@@ -203,10 +203,51 @@ function describeCandidate(companion) {
 }
 
 /**
+ * Orders the windows a session owns: primary first.
+ *
+ * The primary is the oldest, so the window a session started with stays the one
+ * it answers in, and a window forced afterwards joins as a secondary rather
+ * than displacing it. When the primary closes the next oldest simply becomes
+ * primary - no election, no stored state, nothing to go stale.
+ *
+ * `startedAt` is fixed for an extension host's lifetime; `updatedAt` is not, so
+ * it cannot be used here. A companion too old to publish `startedAt` sorts last
+ * rather than winning by accident.
+ */
+function byAge(a, b) {
+    const left = Date.parse(a.startedAt);
+    const right = Date.parse(b.startedAt);
+    if (Number.isFinite(left) && Number.isFinite(right)) return left - right;
+    if (Number.isFinite(left)) return -1;
+    if (Number.isFinite(right)) return 1;
+    return String(a.windowId || "").localeCompare(String(b.windowId || ""));
+}
+
+/**
+ * Every window this session owns, primary first.
+ *
+ * Ownership is the session folder being open in the window, so this is the set
+ * a visual route should reach.
+ */
+export function ownedCompanions(options = {}) {
+    const sessionId = options.sessionId || sessionIdFromPath(options.sessionPath);
+    if (!sessionId && !options.sessionPath) return [];
+    const companions = options.companions || findCompanions();
+    return companions
+        .filter((c) => sameSession(c, { sessionId, sessionPath: options.sessionPath }))
+        .sort(byAge);
+}
+
+/**
  * Selects one exact companion, or reports why choosing would be unsafe.
  *
  * Session identity beats repository identity. Two sessions can work in the
  * same repository, so a project-path match is only usable when it is unique.
+ *
+ * Several windows owned by the *same* session is no longer an error: ownership
+ * is defined by which session folder is open in a window, and a session is
+ * allowed to hold more than one. The oldest answers. Cross-session and
+ * genuinely undecidable cases still refuse.
  */
 export function chooseCompanion(companions, options = {}) {
     if (companions.length === 0) return { companion: null, reason: "absent", candidates: [] };
@@ -223,17 +264,15 @@ export function chooseCompanion(companions, options = {}) {
     }
 
     const sessionId = options.sessionId || sessionIdFromPath(options.sessionPath);
-    const sessionMatches = companions.filter((c) =>
-        sameSession(c, { sessionId, sessionPath: options.sessionPath }),
-    );
-    if (sessionMatches.length === 1) {
-        return { companion: sessionMatches[0], reason: null, candidates: [] };
-    }
-    if (sessionMatches.length > 1) {
+    const sessionMatches = companions
+        .filter((c) => sameSession(c, { sessionId, sessionPath: options.sessionPath }))
+        .sort(byAge);
+    if (sessionMatches.length > 0) {
         return {
-            companion: null,
-            reason: "ambiguous",
-            candidates: sessionMatches.map(describeCandidate),
+            companion: sessionMatches[0],
+            reason: null,
+            candidates: [],
+            owned: sessionMatches,
         };
     }
 
@@ -333,6 +372,25 @@ function samePath(a, b) {
  * Always resolves. `reason` says why it could not be done, so callers can fall
  * back to a plain `--goto` instead of claiming a success they cannot verify.
  */
+/**
+ * Routes that describe something to look at rather than change something.
+ *
+ * These are broadcast to every window the session owns, so a session working
+ * across two windows sees its own annotations in both. Everything else - a
+ * preview's Apply prompt, a workspace edit, a deletion, a query expecting one
+ * answer - goes to the primary alone, because doing it twice is either
+ * destructive or nonsense.
+ */
+const BROADCAST_ROUTES = new Set([
+    "reveal",
+    "",
+    "annotate",
+    "annotate-clear",
+    "tour",
+    "tour-activate",
+    "tour-exit",
+]);
+
 export async function callCompanion(route, payload = null, options = {}) {
     const contextPath = options.contextPath || null;
     const timeoutMs = options.timeoutMs ?? config().companionTimeoutMs;
@@ -372,6 +430,37 @@ export async function callCompanion(route, payload = null, options = {}) {
         };
     }
 
+    const result = await deliverTo(companion, route, payload, {
+        contextPath,
+        timeoutMs,
+    });
+    result.windowId = companion.windowId || null;
+
+    // Secondaries are best effort and deliberately sequential-after: the
+    // primary's answer is the answer, and a secondary that fails is reported
+    // rather than allowed to turn a successful request into a failed one.
+    const secondaries =
+        !options.windowId && BROADCAST_ROUTES.has(route)
+            ? (selected.owned || []).slice(1)
+            : [];
+    if (result.ok && secondaries.length > 0) {
+        const alsoShownIn = [];
+        for (const other of secondaries) {
+            const echo = await deliverTo(other, route, payload, { contextPath, timeoutMs });
+            alsoShownIn.push({
+                windowId: other.windowId || null,
+                ok: Boolean(echo.ok),
+                error: echo.ok ? undefined : echo.error || echo.reason,
+            });
+        }
+        result.alsoShownIn = alsoShownIn;
+    }
+
+    return result;
+}
+
+/** One request to one named window. */
+async function deliverTo(companion, route, payload, { contextPath, timeoutMs }) {
     // Checked before firing: an unreachable pairing would otherwise burn the
     // whole timeout and then report the wrong cause.
     const blocked = unreachable(companion);

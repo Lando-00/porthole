@@ -1,5 +1,8 @@
 # Session-owned windows fail closed
 
+> **Superseded by [0002](0002-a-session-may-own-several-windows.md).** The
+> ownership rule stands; the "exactly one window" part of it does not.
+
 A Porthole window is owned by one exact Copilot session, even when several
 sessions use the same repository. The CLI extension selects by session identity
 and refuses absent, ambiguous, incompatible, or cross-session routing rather

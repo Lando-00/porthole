@@ -314,6 +314,70 @@ check("companion selection refuses cross-session project fallback", () => {
     return "session before project";
 });
 
+check("a session may own several windows, and the oldest answers", () => {
+    // The rule this protects is ADR 0002. Getting it wrong is not a local bug:
+    // chooseCompanion is what every route goes through, so re-introducing an
+    // ambiguity refusal for same-session matches turns off goto, annotate,
+    // tours, reviews and ping all at once for anyone with two windows open.
+    const presence = readFileSync(join(ROOT, "vscode-extension/src/presence.js"), "utf8");
+    if (!/startedAt:\s*STARTED_AT/.test(presence)) {
+        throw new Error(
+            "presence must publish a fixed startedAt - updatedAt is refreshed on every " +
+                "handled request, so it cannot say which window came first",
+        );
+    }
+
+    const source = readFileSync(join(ROOT, "extensions/porthole/lib/companion.mjs"), "utf8");
+    const start = source.indexOf("export function chooseCompanion");
+    const end = source.indexOf("export function selectCompanion");
+    if (start === -1 || end === -1) throw new Error("could not find chooseCompanion");
+    const selector = source.slice(start, end);
+
+    const matches = selector.indexOf("sessionMatches.length > 0");
+    if (matches === -1) {
+        throw new Error("same-session matches must resolve to the primary, not be refused");
+    }
+    if (/sessionMatches[\s\S]{0,200}reason: "ambiguous"/.test(selector)) {
+        throw new Error("several windows owned by one session must not be reported as ambiguous");
+    }
+    if (!selector.includes("owned: sessionMatches")) {
+        throw new Error("the selector must expose the owned set so visual routes can broadcast");
+    }
+
+    // Cross-session protection is the part that actually prevents damage.
+    if (!source.includes('reason: "session-missing"')) {
+        throw new Error("a window owned by another session must still be refused");
+    }
+    return "primary answers, cross-session still refused";
+});
+
+check("routes with side effects are never broadcast", () => {
+    const source = readFileSync(join(ROOT, "extensions/porthole/lib/companion.mjs"), "utf8");
+    const start = source.indexOf("const BROADCAST_ROUTES");
+    const end = source.indexOf("]);", start);
+    if (start === -1 || end === -1) throw new Error("could not find BROADCAST_ROUTES");
+    const listed = source.slice(start, end);
+
+    // Two Apply prompts for one preview, or two workspace edits for one
+    // workspace-add, is either destructive or nonsense.
+    for (const route of [
+        "preview",
+        "workspace-add",
+        "tour-delete",
+        "tour-import",
+        "review-import",
+        "review-save",
+        "tour-list",
+        "review-list",
+        "diagnostics",
+    ]) {
+        if (new RegExp(`"${route}"`).test(listed)) {
+            throw new Error(`'${route}' must go to the primary window only, never broadcast`);
+        }
+    }
+    return "visual routes only";
+});
+
 check("the example config is accepted by the loader", () => {
     readJson("porthole.example.json");
     return "parses";

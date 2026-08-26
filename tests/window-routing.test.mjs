@@ -158,3 +158,79 @@ test("multiple legacy companions are refused", () => {
     assert.equal(selected.companion, null);
     assert.equal(selected.reason, "session-missing");
 });
+
+function agedCompanion(windowId, sessionId, sessionFolder, startedAt) {
+    return { ...companion(windowId, sessionId, sessionFolder), startedAt };
+}
+
+test("a session may own several windows, and the oldest answers", () => {
+    // Ownership is which session folder is open in a window, and a session is
+    // allowed to hold more than one - usually because it deliberately asked for
+    // a second. This used to refuse /cops outright.
+    const result = chooseWindowAction({
+        mode: "auto",
+        sessionId: SESSION_A,
+        sessionFolder: PATH_A,
+        companions: [
+            agedCompanion("2222222222222222", SESSION_A, PATH_A, "2026-01-01T10:05:00.000Z"),
+            agedCompanion("1111111111111111", SESSION_A, PATH_A, "2026-01-01T10:00:00.000Z"),
+        ],
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "existing-window");
+    assert.equal(result.companion.windowId, "1111111111111111", "the first window is the primary");
+});
+
+test("closing the primary promotes the window that remains", () => {
+    const result = chooseWindowAction({
+        mode: "auto",
+        sessionId: SESSION_A,
+        sessionFolder: PATH_A,
+        companions: [
+            agedCompanion("2222222222222222", SESSION_A, PATH_A, "2026-01-01T10:05:00.000Z"),
+        ],
+    });
+    assert.equal(result.action, "existing-window");
+    assert.equal(result.companion.windowId, "2222222222222222");
+});
+
+test("forcing a new window is allowed even when the session already owns one", () => {
+    const result = chooseWindowAction({
+        mode: "new",
+        sessionId: SESSION_A,
+        sessionFolder: PATH_A,
+        companions: [agedCompanion("1111111111111111", SESSION_A, PATH_A, "2026-01-01T10:00:00.000Z")],
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.action, "new-workspace", "a forced window joins as a secondary, not a conflict");
+});
+
+test("a window owned by another session is still refused", () => {
+    const result = chooseWindowAction({
+        mode: "reuse",
+        windowId: "2222222222222222",
+        sessionId: SESSION_A,
+        sessionFolder: PATH_A,
+        companions: [agedCompanion("2222222222222222", SESSION_B, PATH_B, "2026-01-01T10:00:00.000Z")],
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.error, /already bound to Copilot session/);
+});
+
+test("the selector returns the primary and the full owned set", () => {
+    const owned = chooseCompanion(
+        [
+            agedCompanion("2222222222222222", SESSION_A, PATH_A, "2026-01-01T10:05:00.000Z"),
+            agedCompanion("1111111111111111", SESSION_A, PATH_A, "2026-01-01T10:00:00.000Z"),
+            agedCompanion("3333333333333333", SESSION_B, PATH_B, "2026-01-01T09:00:00.000Z"),
+        ],
+        { sessionId: SESSION_A, sessionPath: PATH_A },
+    );
+    assert.equal(owned.reason, null);
+    assert.equal(owned.companion.windowId, "1111111111111111");
+    assert.deepEqual(
+        owned.owned.map((c) => c.windowId),
+        ["1111111111111111", "2222222222222222"],
+        "the other session's window is never part of the owned set",
+    );
+});

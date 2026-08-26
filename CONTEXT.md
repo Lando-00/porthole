@@ -31,9 +31,22 @@ authoritative identity for Porthole ownership.
 _Avoid_: Terminal session, repository session
 
 **Porthole window**:
-A VS Code window owned by one exact Copilot session. Repository identity is
-context only; a bound window never owns a second Copilot session.
+A VS Code window owned by one exact Copilot session. Ownership is which Copilot
+session folder is open in it. Repository identity is context only; a bound
+window never owns a second Copilot session.
 _Avoid_: VS Code session, shared window
+
+**Primary window**:
+The oldest window a Copilot session owns, decided by `startedAt`. It answers for
+the session: every operation with side effects or a single answer goes there,
+and its acknowledgment is the session's answer. When it closes, the next oldest
+becomes primary.
+_Avoid_: Main window, active window
+
+**Secondary window**:
+Any further window the same Copilot session owns, usually one it was explicitly
+asked to open. Visual routes reach it too; single-answer routes do not.
+_Avoid_: Duplicate window, extra window
 
 **Tour**:
 A durable ordered artifact that powers a Walkthrough.
@@ -117,9 +130,10 @@ session. Longer retention requires deliberate export.
 _Avoid_: Global artifact, permanent archive
 
 **Session binding**:
-The exclusive ownership relationship between one Copilot session and one
-Porthole window. Clearing it releases the window without deleting the session's
-Tours or Saved Reviews.
+The ownership relationship between one Copilot session and a Porthole window,
+established by that session's folder being open in it. A session may hold
+several. Clearing it releases the window without deleting the session's Tours or
+Saved Reviews.
 _Avoid_: Repository match, IDE connection
 
 **CLI endpoint**:

@@ -119,6 +119,21 @@ function isBoundToDifferentSession(companion, sessionId, sessionFolder) {
 }
 
 /**
+ * Oldest window first, matching the primary rule in companion.mjs.
+ *
+ * `startedAt` is fixed for an extension host's lifetime; `updatedAt` changes on
+ * every handled request, so it cannot decide which window came first.
+ */
+function bySessionWindowAge(a, b) {
+    const left = Date.parse(a.startedAt);
+    const right = Date.parse(b.startedAt);
+    if (Number.isFinite(left) && Number.isFinite(right)) return left - right;
+    if (Number.isFinite(left)) return -1;
+    if (Number.isFinite(right)) return 1;
+    return String(a.windowId || "").localeCompare(String(b.windowId || ""));
+}
+
+/**
  * Pure window policy. It never reads the filesystem or launches an editor.
  */
 export function chooseWindowAction({
@@ -138,20 +153,18 @@ export function chooseWindowAction({
 
     const exact = companions.filter((c) => companionHasSession(c, sessionId, sessionFolder));
     if (requested === "auto") {
-        if (exact.length === 1) {
+        if (exact.length > 0) {
+            // Several windows owned by one session is not an error. Ownership is
+            // which session folder is open in a window, and a session may hold
+            // more than one - usually because it was deliberately asked for a
+            // second. The oldest is the primary and answers for the session;
+            // refusing here used to break /cops for a layout the user chose.
+            const [primary] = [...exact].sort(bySessionWindowAge);
             return {
                 ok: true,
                 action: "existing-window",
-                companion: windowSummary(exact[0]),
+                companion: windowSummary(primary),
                 candidates: [],
-            };
-        }
-        if (exact.length > 1) {
-            return {
-                ok: false,
-                action: "refuse",
-                error: "more than one window is bound to this Copilot session",
-                candidates: exact.map(windowSummary),
             };
         }
         return { ok: true, action: "new-workspace", candidates: [] };

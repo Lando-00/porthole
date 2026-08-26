@@ -392,3 +392,120 @@ test("a remote window on a different filesystem is still refused, and says where
         harness.dispose();
     }
 });
+
+test("a visual route reaches every window the session owns", async () => {
+    const harness = await createPortholeHarness();
+    try {
+        const session = harness.addSession(
+            "12121212-1212-1212-1212-121212121212",
+            "C:\\repo",
+        );
+        const primary = harness.addWindow({
+            windowId: "7171717171717171",
+            session,
+            routes: { annotate: () => ({ ok: true, applied: 1 }) },
+            presenceOverrides: { startedAt: "2026-01-01T10:00:00.000Z" },
+        });
+        const secondary = harness.addWindow({
+            windowId: "8282828282828282",
+            session,
+            routes: { annotate: () => ({ ok: true, applied: 1 }) },
+            presenceOverrides: { startedAt: "2026-01-01T10:05:00.000Z" },
+        });
+
+        const { callCompanion } = await import("../extensions/porthole/lib/companion.mjs");
+        const result = await callCompanion(
+            "annotate",
+            { annotations: [] },
+            { sessionId: session.id, sessionPath: session.dir, timeoutMs: 4000 },
+        );
+
+        assert.equal(result.ok, true);
+        assert.equal(result.windowId, "7171717171717171", "the primary answers");
+        assert.equal(primary.requests.length, 1, "the primary sees it");
+        assert.equal(secondary.requests.length, 1, "and so does the secondary");
+        assert.deepEqual(
+            (result.alsoShownIn || []).map((w) => w.windowId),
+            ["8282828282828282"],
+        );
+    } finally {
+        harness.dispose();
+    }
+});
+
+test("a route with side effects goes only to the primary", async () => {
+    // Broadcasting workspace-add would edit two workspaces, and broadcasting a
+    // preview would put an Apply prompt in front of the user twice.
+    const harness = await createPortholeHarness();
+    try {
+        const session = harness.addSession(
+            "13131313-1313-1313-1313-131313131313",
+            "C:\\repo",
+        );
+        const primary = harness.addWindow({
+            windowId: "9191919191919191",
+            session,
+            presenceOverrides: { startedAt: "2026-01-01T10:00:00.000Z" },
+        });
+        const secondary = harness.addWindow({
+            windowId: "a2a2a2a2a2a2a2a2",
+            session,
+            presenceOverrides: { startedAt: "2026-01-01T10:05:00.000Z" },
+        });
+
+        const { callCompanion } = await import("../extensions/porthole/lib/companion.mjs");
+        const result = await callCompanion(
+            "workspace-add",
+            { folders: ["C:\\repo"] },
+            { sessionId: session.id, sessionPath: session.dir, timeoutMs: 4000 },
+        );
+
+        assert.equal(result.ok, true);
+        assert.equal(primary.requests.length, 1);
+        assert.deepEqual(secondary.requests, [], "the secondary must be left alone");
+        assert.equal(result.alsoShownIn, undefined);
+    } finally {
+        harness.dispose();
+    }
+});
+
+test("an explicit windowId overrides the primary and never broadcasts", async () => {
+    const harness = await createPortholeHarness();
+    try {
+        const session = harness.addSession(
+            "14141414-1414-1414-1414-141414141414",
+            "C:\\repo",
+        );
+        const primary = harness.addWindow({
+            windowId: "b3b3b3b3b3b3b3b3",
+            session,
+            routes: { annotate: () => ({ ok: true, applied: 1 }) },
+            presenceOverrides: { startedAt: "2026-01-01T10:00:00.000Z" },
+        });
+        const secondary = harness.addWindow({
+            windowId: "c4c4c4c4c4c4c4c4",
+            session,
+            routes: { annotate: () => ({ ok: true, applied: 1 }) },
+            presenceOverrides: { startedAt: "2026-01-01T10:05:00.000Z" },
+        });
+
+        const { callCompanion } = await import("../extensions/porthole/lib/companion.mjs");
+        const result = await callCompanion(
+            "annotate",
+            { annotations: [] },
+            {
+                sessionId: session.id,
+                sessionPath: session.dir,
+                windowId: "c4c4c4c4c4c4c4c4",
+                timeoutMs: 4000,
+            },
+        );
+
+        assert.equal(result.ok, true);
+        assert.equal(result.windowId, "c4c4c4c4c4c4c4c4");
+        assert.equal(secondary.requests.length, 1);
+        assert.deepEqual(primary.requests, [], "naming a window means that window only");
+    } finally {
+        harness.dispose();
+    }
+});

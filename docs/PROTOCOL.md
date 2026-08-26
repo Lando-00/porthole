@@ -200,7 +200,7 @@ Set by the CLI so callers can react without parsing English:
 | `reason` | Meaning | Right response |
 |---|---|---|
 | `absent` | No live companion heartbeat | Tell the user to open VS Code; do **not** burn the timeout |
-| `ambiguous` | Several windows could handle the request | List them and ask the user; perform no action |
+| `ambiguous` | Several windows could handle the request, and none is the session's | List them and ask the user; perform no action |
 | `unknown-window` | A requested `windowId` is no longer live | Refresh the window list |
 | `timeout` | Fired, no ack in time | Window busy or companion needs a reload |
 | `refused` | Companion answered `ok: false` | Report the companion's own `error` |
@@ -445,6 +445,34 @@ session, an unambiguous project match only when no session target exists, then a
 sole old companion for mixed-version compatibility.
 
 Presence binds a session **only** from an exact session folder in the workspace.
+
+### One session, one or more windows
+
+Ownership is which Copilot session folder is open in a window, and a session may
+own several — see
+[ADR 0002](adr/0002-a-session-may-own-several-windows.md). That is no longer an
+`ambiguous` refusal.
+
+`startedAt` is fixed for an extension host's lifetime and orders them: the
+oldest owned window is the **primary**, later ones are **secondaries**. When the
+primary closes the next oldest takes over, with no stored state to go stale.
+`updatedAt` cannot be used for this, because handling a request refreshes it.
+
+| Request | Target |
+|---|---|
+| explicit `windowId` | that window only, never broadcast |
+| `reveal`, `annotate`, `annotate-clear`, `tour`, `tour-activate`, `tour-exit` | every owned window; the primary's ack is the answer, and `alsoShownIn` reports each secondary |
+| everything else, including `preview`, `workspace-add`, deletions and queries | the primary alone |
+| a window owned by a **different** session | refused, unchanged |
+
+Side-effecting and single-answer routes stay on the primary because performing
+them twice is either destructive or meaningless — two Apply prompts for one
+preview, two workspace edits for one `workspace-add`. Every result carries the
+`windowId` that answered.
+
+`ambiguous` still exists for genuinely undecidable cases: several unbound
+windows with no session evidence, or several legacy companions. It is no longer
+reachable through same-session matches.
 
 ### Capability negotiation
 
