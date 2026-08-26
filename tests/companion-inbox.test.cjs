@@ -139,3 +139,91 @@ test("a slow route does not hold up the requests behind it", async () => {
 
     subscription.dispose();
 });
+
+test("a request the CLI gave up on is never dispatched", async () => {
+    // The CLI removes the pending file on timeout, but the claim is a rename -
+    // so once the companion has claimed it, the file being removed is no longer
+    // the file the companion holds, and the route ran anyway. The model, told
+    // the window never answered, then retried: two previews, two workspace
+    // edits, two of whatever the route does.
+    const windowId = "abcdefabcdef0000";
+    const requestId = `${Date.now()}-abandoned`;
+    const dispatched = [];
+
+    const subscription = inbox.start(windowId, async (request) => {
+        dispatched.push(request.requestId);
+        transport.writeAck(request.requestId, { ok: true });
+    });
+
+    const dir = inbox.inboxDir(windowId);
+
+    // The CLI's timeout path: marker first, then remove the request.
+    const marker = path.join(dir, `${requestId}.abandoned`);
+    fs.writeFileSync(`${marker}.tmp`, JSON.stringify({ requestId }), "utf8");
+    fs.renameSync(`${marker}.tmp`, marker);
+
+    // The request lands (or was already there) after the CLI stopped listening.
+    const file = path.join(dir, `${requestId}.json`);
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify({ requestId, route: "reveal", payload: {} }), "utf8");
+    fs.renameSync(`${file}.tmp`, file);
+
+    // Give the watcher and the fallback poll a fair chance to act on it.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    assert.deepEqual(dispatched, [], "an abandoned request must run no route at all");
+    assert.equal(fs.existsSync(file), false, "the request is cleaned up");
+    assert.equal(fs.existsSync(marker), false, "and so is its marker");
+
+    subscription.dispose();
+});
+
+test("an ordinary request is unaffected by the abandonment check", async () => {
+    const windowId = "abcdefabcdef1111";
+    const requestId = `${Date.now()}-normal`;
+    const dispatched = [];
+
+    const subscription = inbox.start(windowId, async (request) => {
+        dispatched.push(request.requestId);
+        transport.writeAck(request.requestId, { ok: true });
+    });
+
+    const dir = inbox.inboxDir(windowId);
+    const file = path.join(dir, `${requestId}.json`);
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify({ requestId, route: "ping", payload: null }), "utf8");
+    fs.renameSync(`${file}.tmp`, file);
+
+    const ackFile = path.join(os.tmpdir(), "porthole", "ack", `${requestId}.json`);
+    await waitFor(ackFile, 3000);
+    fs.rmSync(ackFile, { force: true });
+
+    assert.deepEqual(dispatched, [requestId]);
+    subscription.dispose();
+});
+
+test("a malformed marker is discarded and blocks nothing", async () => {
+    const windowId = "abcdefabcdef2222";
+    const requestId = `${Date.now()}-clean`;
+    const dispatched = [];
+
+    const subscription = inbox.start(windowId, async (request) => {
+        dispatched.push(request.requestId);
+        transport.writeAck(request.requestId, { ok: true });
+    });
+
+    const dir = inbox.inboxDir(windowId);
+    const junk = path.join(dir, "not a valid id!.abandoned");
+    fs.writeFileSync(junk, "{}", "utf8");
+
+    const file = path.join(dir, `${requestId}.json`);
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify({ requestId, route: "ping", payload: null }), "utf8");
+    fs.renameSync(`${file}.tmp`, file);
+
+    const ackFile = path.join(os.tmpdir(), "porthole", "ack", `${requestId}.json`);
+    await waitFor(ackFile, 3000);
+    fs.rmSync(ackFile, { force: true });
+
+    assert.deepEqual(dispatched, [requestId], "junk must not stop real requests");
+    assert.equal(fs.existsSync(junk), false, "and must be discarded");
+
+    subscription.dispose();
+});

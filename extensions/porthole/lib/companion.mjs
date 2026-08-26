@@ -427,7 +427,16 @@ export async function callCompanion(route, payload = null, options = {}) {
     const ack = await waitForAck(requestId, timeoutMs);
     if (!ack) {
         rmSync(join(REQ_DIR, `${requestId}.json`), { force: true });
-        if (inboxFile) rmSync(inboxFile, { force: true });
+        if (inboxFile) {
+            // The marker goes down BEFORE the request is removed, so there is
+            // never a moment where neither exists. Deleting alone cannot stop a
+            // request that has already been claimed: the claim is a rename, so
+            // the file being deleted is no longer the file the companion holds,
+            // and the route would run anyway - after the model had been told the
+            // window never answered, and had retried.
+            abandonInbox(companion.windowId, requestId);
+            rmSync(inboxFile, { force: true });
+        }
         return {
             ok: false,
             reason: "timeout",
@@ -436,6 +445,28 @@ export async function callCompanion(route, payload = null, options = {}) {
     }
 
     return ack.ok ? ack : { ...ack, reason: ack.reason || "refused" };
+}
+
+/**
+ * Tells the addressed window that this request no longer has anyone listening.
+ *
+ * Best effort: if the marker cannot be written the behaviour is simply what it
+ * was before, so this must never turn a timeout into a thrown error.
+ */
+function abandonInbox(windowId, requestId) {
+    if (!WINDOW_ID.test(String(windowId || ""))) return;
+    try {
+        const file = join(inboxRoot(), windowId, `${requestId}.abandoned`);
+        const tmp = `${file}.tmp`;
+        writeFileSync(
+            tmp,
+            JSON.stringify({ requestId, abandonedAt: new Date().toISOString() }),
+            { encoding: "utf8", mode: 0o600 },
+        );
+        renameSync(tmp, file);
+    } catch {
+        // The window may already be gone, which needs no marker.
+    }
 }
 
 function writeInbox(windowId, request) {

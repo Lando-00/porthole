@@ -20,6 +20,10 @@ const ROUTE_RE = /^[A-Za-z0-9-]{0,64}$/;
 // but make it large enough for the preview module's documented 5 MB payload.
 const MAX_REQUEST_BYTES = 6 * 1024 * 1024;
 const PROCESSING = ".processing";
+const ABANDONED = ".abandoned";
+// A marker for a request the window never claimed has nothing to cancel, so it
+// is swept rather than kept. Comfortably longer than any route's timeout.
+const ABANDONED_TTL_MS = 5 * 60 * 1000;
 // A long-running route must not stop the next request being claimed, but an
 // unbounded fan-out would let a stuck window accumulate work without limit.
 const MAX_IN_FLIGHT = 8;
@@ -194,6 +198,17 @@ function consume(state, entry) {
         return;
     }
 
+    if (isAbandoned(state, requestId)) {
+        clearAbandoned(state, requestId);
+        try {
+            fs.rmSync(claimed, { force: true });
+        } catch {
+            // Deactivation may have removed the inbox already.
+        }
+        diag(`porthole skipped ${requestId}: the CLI stopped waiting for it`);
+        return;
+    }
+
     state.inFlight += 1;
     void handle(state, claimed, requestId).finally(() => {
         state.inFlight -= 1;
@@ -201,6 +216,49 @@ function consume(state, entry) {
         // the inbox, so look again now that there is room.
         schedule(state);
     });
+}
+
+/**
+ * Whether the CLI gave up on this request before we got to it.
+ *
+ * Checked after the claim, because the claim is what the CLI cannot undo: it
+ * removes the pending file on timeout, but a rename that has already happened
+ * means the file it removes is not the file we hold. Without this the route
+ * would run after the model had been told the window never answered - and the
+ * model, having retried, would get two previews, two workspace edits, two of
+ * whatever the route does.
+ */
+function isAbandoned(state, requestId) {
+    try {
+        return fs.existsSync(childPath(state.dir, `${requestId}${ABANDONED}`));
+    } catch {
+        return false;
+    }
+}
+
+function clearAbandoned(state, requestId) {
+    try {
+        fs.rmSync(childPath(state.dir, `${requestId}${ABANDONED}`), { force: true });
+    } catch {
+        // Deactivation may have removed the inbox already.
+    }
+}
+
+/** Drops a marker whose request was never claimed and never will be. */
+function sweepAbandoned(state, entry) {
+    const requestId = entry.slice(0, -ABANDONED.length);
+    if (!isValidRequestId(requestId)) {
+        discardInvalidEntry(state.dir, entry);
+        return;
+    }
+    try {
+        const file = childPath(state.dir, entry);
+        if (Date.now() - fs.statSync(file).mtimeMs > ABANDONED_TTL_MS) {
+            fs.rmSync(file, { force: true });
+        }
+    } catch {
+        // Racing our own sweep is fine.
+    }
 }
 
 async function handle(state, claimed, requestId) {
@@ -235,6 +293,10 @@ function scan(state) {
 
     for (const entry of entries) {
         if (state.stopped) return;
+        if (entry.endsWith(ABANDONED)) {
+            sweepAbandoned(state, entry);
+            continue;
+        }
         if (!entry.endsWith(".json")) continue;
         // Leave the rest for the next pass rather than opening an unbounded
         // number of routes at once.

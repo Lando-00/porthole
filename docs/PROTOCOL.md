@@ -20,6 +20,7 @@ This document is the contract. Both halves implement against it, and
 | `<tmp>/porthole/req/<requestId>.json` | CLI | companion | Request payload |
 | `<tmp>/porthole/ack/<requestId>.json` | companion | CLI | Result of that request |
 | `~/.copilot/porthole/inbox/<windowId>/<requestId>.json` | CLI | one companion window | Addressed CLI → editor request |
+| `~/.copilot/porthole/inbox/<windowId>/<requestId>.abandoned` | CLI | that companion window | "Nobody is waiting for this any more" |
 | `~/.copilot/porthole/outbox/<endpointId>/<messageId>.json` | companion | CLI | Editor → CLI message |
 | `~/.copilot/porthole/outbox/<endpointId>/inflight/<messageId>.json` | CLI | CLI | Claimed, not yet delivered |
 | `~/.copilot/porthole/outbox-ack/<messageId>.json` | CLI | companion | Delivery outcome |
@@ -100,7 +101,38 @@ Normal requests use the addressed inbox:
 3. that window  consumes the request and dispatches its route
 4. companion writes <tmp>/porthole/ack/<requestId>.json
 5. CLI watches and polls for the ack until companionTimeoutMs, then DELETES it
+   -- and on timeout, writes <requestId>.abandoned before removing the request
 ```
+
+### Abandonment
+
+Deleting the pending request on timeout is not enough to stop it running. The
+claim is a rename, so once the companion has claimed it the file the CLI deletes
+is no longer the file the companion holds — the route ran anyway, after the
+model had been told the window never answered. The model then retried, and
+`preview`, `workspace-add`, `tour-delete` and `review-import` happened twice.
+
+So a timeout also writes a tombstone:
+
+```
+inbox/<windowId>/<requestId>.abandoned
+```
+
+It is written **before** the pending request is removed, so there is never a
+moment where neither file exists. After claiming, and before dispatching, the
+companion checks for it: if present, it runs no route at all, deletes the
+claimed request and the marker, and logs it. This applies to every route, not
+only the ones with side effects — the caller having stopped listening is reason
+enough not to move the user's cursor either.
+
+Markers are validated with the same `requestId` pattern and containment rules as
+requests, and a marker for a request that is never claimed is swept after five
+minutes.
+
+> **The race is narrowed, not closed.** The companion can check the tombstone
+> microseconds before the CLI writes it. Closing that completely needs a
+> two-phase handshake, which would cost a round trip on every request; the
+> window is now one check wide instead of one timeout wide.
 
 The request file contains `{ requestId, route, payload }`. Each companion
 watches and scans only its own owner-only inbox. This is the exact-window
@@ -953,6 +985,7 @@ file. Classification and discovery are read-only and idempotent.
 |---|---|
 | `req/`, `ack/` | Swept after 1 hour; each file is deleted by its reader |
 | `inbox/<windowId>/` | Owned by that companion; requests consumed on receipt, abandoned inbox pruned after its PID dies |
+| `inbox/<windowId>/*.abandoned` | Removed when the request is claimed; swept after 5 minutes if it never is |
 | `outbox/` | Unclaimed messages acked `expired` and deleted after 10 minutes |
 | `outbox/*/inflight/` | Acked `unconfirmed` and deleted after 10 minutes |
 | `outbox-ack/` | Swept after 1 hour |
