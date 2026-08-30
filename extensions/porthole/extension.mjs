@@ -44,6 +44,7 @@ import { example, help, subcommand, unknownSubcommand } from "./lib/guide.mjs";
 import * as endpoint from "./lib/endpoint.mjs";
 import * as outbox from "./lib/outbox.mjs";
 import { problems, tools as problemTools } from "./lib/problems.mjs";
+import { tools as changeTools } from "./lib/changes.mjs";
 import { exitTour, tour, tours, tools as tourTools } from "./lib/tour.mjs";
 import { review, tools as reviewTools } from "./lib/reviews.mjs";
 import { openSession, parseArgs, tools as openSessionTools } from "./lib/opensession.mjs";
@@ -392,6 +393,7 @@ const session = await joinSession({
         ...portholeTools(() => session),
         ...openSessionTools(() => session),
         ...problemTools(() => session),
+        ...changeTools(() => session),
         ...tourTools(() => session),
         ...reviewTools(() => session),
         ...previewTools(() => session),
