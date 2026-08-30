@@ -38,6 +38,16 @@ it is not; ask a single question instead.
 Look at the code properly first. A walkthrough built from a guess is worse than
 prose, because it points at specific lines with authority.
 
+**If the subject is a change** — a pull request, a branch, "what you just did",
+"what changed" — call `porthole_changes` first. It returns the changed hunks as
+candidate steps, so you do not have to hunt for them and cannot silently miss a
+file. Drop the candidates that do not earn a stop, order what is left the way
+control flows, and say how many you left out.
+
+If it reports that a pull request is not checked out, give the user the exact
+command and stop. Never build a walkthrough from line numbers that do not match
+the files on their screen.
+
 Call `porthole_tours` first. If a walkthrough of this already exists, extend or
 replace it rather than adding a near-duplicate, and say which you did.
 

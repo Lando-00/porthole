@@ -702,6 +702,27 @@ check("closing a tour is not the same as deleting it", () => {
     return "close leaves the file alone";
 });
 
+check("every registered tool is documented in the README", () => {
+    // Documentation drift is invisible until someone goes looking for a tool
+    // that was never written down. The tool table is the only list a user
+    // reads, so a tool missing from it effectively does not exist.
+    const libDir = join(ROOT, "extensions/porthole/lib");
+    const names = new Set();
+    for (const entry of readdirSync(libDir)) {
+        if (!entry.endsWith(".mjs")) continue;
+        const source = readFileSync(join(libDir, entry), "utf8");
+        for (const m of source.matchAll(/name:\s*"(porthole_[a-z_]+)"/g)) names.add(m[1]);
+    }
+    if (names.size === 0) throw new Error("no tools found; the detection here has rotted");
+
+    const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+    const missing = [...names].filter((name) => !readme.includes(`\`${name}\``));
+    if (missing.length) {
+        throw new Error(`not in the README tool table: ${missing.join(", ")}`);
+    }
+    return `${names.size} tools documented`;
+});
+
 // ---------------------------------------------------------------------------
 
 console.log(checks.join("\n"));

@@ -83,7 +83,7 @@ same behaviour every time, no model in the loop, no tokens spent.
 
 ## Tools Copilot can call
 
-Sixteen tools are registered with the agent, so it can drive your editor mid-answer
+Seventeen tools are registered with the agent, so it can drive your editor mid-answer
 without you typing anything.
 
 | Tool | What it does |
@@ -97,6 +97,7 @@ without you typing anything.
 | `porthole_tour_cleanup_legacy` | Confirms and deletes one provable legacy copy |
 | `porthole_tour_manage` | Switches, closes or deletes a walkthrough by id |
 | `porthole_problems` | Reads your Problems panel, so it stops guessing at compile errors |
+| `porthole_changes` | Turns a diff into candidate walkthrough steps, so a review never misses a file |
 | `porthole_review` | Saves, lists, loads or deletes this session's findings |
 | `porthole_review_discover` | Searches read-only Saved Reviews from other sessions |
 | `porthole_review_import` | Copies a discovered review into this session with provenance |
@@ -135,6 +136,13 @@ allowed to do that on its own.
 A change worth explaining rarely has one thread. A pull request has the auth
 path, the error handling and the migration — so porthole holds **many tours at
 once, with one active**.
+
+Ask for a walkthrough of a change — *"walk me through this PR"*, *"walk me
+through what you just did"* — and porthole reads the diff first, so Copilot
+starts from the changed hunks instead of going looking for them. Every changed
+file is either explained or deliberately left out, and it will tell you how many
+it left out. A pull request has to be checked out first: line numbers from a
+branch you do not have would point the walkthrough at the wrong code.
 
 - The **active** tour owns the gutter, the CodeLenses and the status bar. You
   can only follow one path with your eyes at a time.

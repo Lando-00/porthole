@@ -62,6 +62,12 @@ One meaningful explanatory stop in a Tour: an anchored code location, title,
 and narration.
 _Avoid_: File mention, symbol occurrence
 
+**Candidate step**:
+A changed code range offered to the model as a possible Tour step. It has a
+location but no narration, and it is not part of any Tour until the model
+selects it.
+_Avoid_: Hunk, diff step
+
 **Tour library**:
 The collection of tours owned by one Copilot session. A resumed session
 restores its library across VS Code closes and CLI restarts; a fork starts with
