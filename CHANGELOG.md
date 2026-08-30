@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.0
+
+**A walkthrough of a change now starts from the change.** Asking to be walked
+through a pull request, a branch, or what Copilot just did used to mean Copilot
+going looking for the changed code first — slow, and it could quietly leave a
+changed file out of the walkthrough with nothing to tell you. It now reads the
+diff before it starts, so every changed hunk is either explained or deliberately
+left out, and it will say how many it left out.
+
+Files Copilot created but has not committed are included, which is usually the
+most interesting part of what an autopilot session did. Lockfiles, build output
+and binaries are left out. A deleted file is named but never walked, because
+there is no longer anything to point at.
+
+A pull request has to be checked out first. If it is not, porthole refuses and
+gives you the `gh pr checkout` command rather than building a walkthrough from
+line numbers that do not match the files on your screen — that walkthrough would
+point confidently at unrelated code, and you would have no way to tell.
+
 ## 1.1.0
 
 **Porthole now works inside WSL, Dev Containers and Codespaces.** Running the
