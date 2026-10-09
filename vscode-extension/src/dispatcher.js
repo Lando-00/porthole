@@ -7,14 +7,12 @@ function createDispatcher({
     knownRoutes,
     optionalPayloadRoutes = new Set(),
     dispatch,
-    writeAck,
     onHandled = () => {},
     warn = () => {},
     diag = () => {},
 }) {
     if (!(knownRoutes instanceof Set)) throw new TypeError("knownRoutes must be a Set");
     if (typeof dispatch !== "function") throw new TypeError("dispatch is required");
-    if (typeof writeAck !== "function") throw new TypeError("writeAck is required");
 
     return async function executeRequest(route, payload, requestId = null, source = "uri") {
         const normalised = normaliseRoute(route);
@@ -28,30 +26,46 @@ function createDispatcher({
                         ? "route was missing or invalid"
                         : `unknown route '${normalised}'`,
             };
-            writeAck(requestId, result);
             if (!requestId) warn(result.error);
             return result;
         }
 
         if (requestId && payload === null && !optionalPayloadRoutes.has(normalised)) {
-            const result = { ok: false, error: "payload file was missing or unreadable" };
-            writeAck(requestId, result);
-            return result;
+            return { ok: false, error: "payload file was missing or unreadable" };
         }
 
         let result;
         try {
             result = await dispatch(normalised, payload || {});
         } catch (error) {
-            result = { ok: false, error: error?.message || String(error) };
+            result = {
+                ok: false,
+                error: error?.message || String(error),
+                mayHaveExecuted: true,
+            };
         }
         if (!result || typeof result !== "object") {
-            result = { ok: false, error: "route returned no result" };
+            result = {
+                ok: false,
+                error: "route returned no result",
+                mayHaveExecuted: true,
+            };
         }
-
         diag(`route=${normalised} ok=${result.ok}${result.error ? ` error=${result.error}` : ""}`);
-        writeAck(requestId, result);
-        await onHandled(result, { route: normalised, requestId, source });
+        try {
+            await onHandled(result, { route: normalised, requestId, source });
+        } catch (error) {
+            const postDispatchError = error?.message || String(error);
+            result = result.ok
+                ? {
+                      ...result,
+                      ok: false,
+                      error: `route completed but post-dispatch handling failed: ${postDispatchError}`,
+                      mayHaveExecuted: true,
+                  }
+                : { ...result, postDispatchError };
+        }
+        diag(`route=${normalised} ok=${result.ok}${result.error ? ` error=${result.error}` : ""}`);
 
         if (!result.ok && !requestId) warn(result.error);
         return result;

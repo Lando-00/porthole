@@ -17,6 +17,7 @@ import * as endpoint from "./endpoint.mjs";
 import { findEndpoints, portholeHome } from "./endpoint.mjs";
 import { currentBranch, dirtyCount, isGitRepo, projectRoot } from "./git.mjs";
 import { companionOptions } from "./target.mjs";
+import { withDeliveryNotes } from "./delivery-notes.mjs";
 
 const MARK = { ok: "ok  ", warn: "warn", fail: "fail", info: "    " };
 
@@ -226,7 +227,7 @@ async function companion(report, cwd, session) {
         for (const folder of c.workspaceFolders || []) report.detail(folder);
     }
 
-    // A heartbeat only proves the window started. This proves a URI arrives,
+    // A heartbeat only proves the window started. This proves a request arrives,
     // which is the part that actually breaks.
     const started = Date.now();
     const ping = await callCompanion("ping", null, companionOptions(cwd, session));
@@ -241,6 +242,12 @@ async function companion(report, cwd, session) {
             "reload the VS Code window; if it persists, reinstall the companion",
         );
     }
+    reportDelivery(report, ping);
+}
+
+function reportDelivery(report, result) {
+    const notes = withDeliveryNotes(result, "").trim();
+    if (notes) report.detail(notes.replace(/\n/g, "\n        "));
 }
 
 /**
@@ -316,6 +323,7 @@ async function toursSection(report, cwd, session) {
     report.section("tours");
 
     const result = await callCompanion("tour-list", {}, companionOptions(cwd, session));
+    reportDelivery(report, result);
     if (!result.ok) {
         report.add("warn", `could not read the tour library: ${explain(result)}`);
         return;
@@ -330,9 +338,14 @@ async function toursSection(report, cwd, session) {
     const loaded = list.filter((t) => t.loaded).length;
     const active = list.find((t) => t.active);
     report.add("ok", `${list.length} tour(s), ${loaded} loaded`);
-    report.detail(active ? `walking "${active.title}" (${active.tourId})` : "none active");
+    report.detail(active
+        ? `walking "${active.title}" (${active.tourId})`
+        : result.result?.activeTourId ? `active Tour: ${result.result.activeTourId} (outside this result)` : "none active");
 
     for (const t of list) {
+        if (t.revisionState === "revision-changed") {
+            report.add("warn", `"${t.title}": repository revision changed since publication`, "inspect the code before deciding whether to refresh the Tour");
+        }
         const s = t.staleness;
         if (!s) continue;
         const drifted = (s.changed || 0) + (s.missing || 0);

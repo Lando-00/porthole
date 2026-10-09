@@ -18,7 +18,11 @@ const LEGACY_ROUTES = new Set([
 ]);
 
 export const CLI_PROTOCOL_LEVEL = 1;
-export const CLI_CAPABILITIES = Object.freeze(["transport:addressed-inbox"]);
+export const SESSION_OWNED_OPERATIONS = "transport:session-owned-operations-v1";
+export const CLI_CAPABILITIES = Object.freeze([
+    "transport:addressed-inbox",
+    SESSION_OWNED_OPERATIONS,
+]);
 export const REQUIRED_COMPANION_CAPABILITIES = Object.freeze([
     "transport:addressed-inbox",
 ]);
@@ -54,6 +58,11 @@ export function companionSupportsRoute(companion, route) {
             "porthole companion predates capability negotiation. Update the porthole companion " +
             "and open a new VS Code window.",
     };
+}
+
+export function companionSupportsSessionOwnedOperations(companion) {
+    return Array.isArray(companion?.capabilities) &&
+        companion.capabilities.includes(SESSION_OWNED_OPERATIONS);
 }
 
 export const legacyRoutes = () => new Set(LEGACY_ROUTES);

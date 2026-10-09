@@ -15,6 +15,7 @@ import { callCompanion, explain } from "./companion.mjs";
 import { ensureCompanion } from "./ensure.mjs";
 import { copilotHome } from "./config.mjs";
 import { companionOptions, sessionPath } from "./target.mjs";
+import { withDeliveryNotes } from "./delivery-notes.mjs";
 
 const SCHEMA = 1;
 const SLUG_PATTERN = /^[\w-]{1,64}$/;
@@ -97,7 +98,7 @@ function describeFindings(review, resolution) {
 
     if (resolution) {
         const parts = [];
-        if (resolution.resolved) parts.push(`${resolution.resolved} still apply`);
+        if (resolution.resolved) parts.push(`${resolution.resolved} have matching saved text`);
         if (resolution.shifted) parts.push(`${resolution.shifted} moved but were found again`);
         if (resolution.changed) parts.push(`${resolution.changed} sit on code that has changed`);
         if (resolution.missing) parts.push(`${resolution.missing} point at files that are gone`);
@@ -147,8 +148,8 @@ export async function review(args = {}, getSession = null) {
             { slug: args.slug, title: args.title },
             companionOptions(root, getSession),
         );
-        if (!result.ok) return `porthole: ${explain(result)}`;
-        return (
+        if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
+        return withDeliveryNotes(result,
             `porthole: saved ${result.result.findings} finding(s) as '${result.result.slug}'.\n` +
             `Load it later with porthole_review { action: "load", slug: "${result.result.slug}" }.`
         );
@@ -171,7 +172,7 @@ export async function review(args = {}, getSession = null) {
             companionOptions(root, getSession),
         );
         if (result.ok) {
-            return describeFindings(result.result.review, result.result.resolution);
+            return withDeliveryNotes(result, describeFindings(result.result.review, result.result.resolution));
         }
 
         // No window, or it refused: the findings are still useful, they just
@@ -183,7 +184,7 @@ export async function review(args = {}, getSession = null) {
             }).find((r) => r.slug === args.slug);
             if (match) return describeFindings(match, null) + openNote;
         }
-        return `porthole: ${explain(result)}${openNote}`;
+        return withDeliveryNotes(result, `porthole: ${explain(result)}${openNote}`);
     }
 
     if (action === "delete") {
@@ -192,11 +193,11 @@ export async function review(args = {}, getSession = null) {
             { slug: args.slug },
             companionOptions(root, getSession),
         );
-        if (!result.ok) return `porthole: ${explain(result)}`;
+        if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
         if (result.cancelled || result.deleted === false) {
-            return "porthole: Saved Review deletion cancelled.";
+            return withDeliveryNotes(result, "porthole: Saved Review deletion cancelled.");
         }
-        return `porthole: deleted '${args.slug}' from this Copilot session only.`;
+        return withDeliveryNotes(result, `porthole: deleted '${args.slug}' from this Copilot session only.`);
     }
 
     return `porthole: unknown action '${action}' - use list, save, load or delete.`;
@@ -208,14 +209,14 @@ async function discoverReviews(args = {}, getSession = null) {
         { repo: args.repo, sourceSessionId: args.sourceSessionId, limit: args.limit },
         companionOptions(process.cwd(), getSession),
     );
-    if (!result.ok) return `porthole: ${explain(result)}`;
+    if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
     const reviews = result.result?.reviews || [];
-    if (!reviews.length) return "porthole: Saved Review Discovery found no matches.";
-    return reviews.map((review) =>
+    if (!reviews.length) return withDeliveryNotes(result, "porthole: Saved Review Discovery found no matches.");
+    return withDeliveryNotes(result, reviews.map((review) =>
         `${review.sourceSessionId}/${review.slug} - ${review.title} ` +
         `(${review.findings} findings, ${review.branch || "no branch"}, ` +
         `created ${review.createdAt || "unknown"}, updated ${review.updatedAt || "unknown"})`,
-    ).join("\n");
+    ).join("\n"));
 }
 
 async function importSavedReview(args = {}, getSession = null) {
@@ -229,11 +230,11 @@ async function importSavedReview(args = {}, getSession = null) {
         },
         companionOptions(process.cwd(), getSession),
     );
-    if (!result.ok) return `porthole: ${explain(result)}`;
+    if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
     if (result.cancelled || result.imported === false) {
-        return `porthole: Saved Review import cancelled.${result.suggestedSlug ? ` Suggested slug: ${result.suggestedSlug}.` : ""}`;
+        return withDeliveryNotes(result, `porthole: Saved Review import cancelled.${result.suggestedSlug ? ` Suggested slug: ${result.suggestedSlug}.` : ""}`);
     }
-    return `porthole: imported '${args.sourceSlug}' as '${result.result.slug}' into this Copilot session.`;
+    return withDeliveryNotes(result, `porthole: imported '${args.sourceSlug}' as '${result.result.slug}' into this Copilot session.`);
 }
 
 export function tools(getSession = null) {

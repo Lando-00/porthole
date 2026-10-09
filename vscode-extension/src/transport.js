@@ -29,6 +29,7 @@ const REQ_DIR = path.join(ROOT, "req");
 const ACK_DIR = path.join(ROOT, "ack");
 
 const MAX_AGE_MS = 60 * 60 * 1000;
+const MAX_ACK_BYTES = 2 * 1024 * 1024;
 // Retry schedule for a rename the filesystem is momentarily refusing.
 const RENAME_RETRY_MS = [2, 5, 15, 40];
 
@@ -115,20 +116,61 @@ function readPayload(requestId) {
 }
 
 function writeAck(requestId, body) {
-    if (!requestId) return;
+    if (!requestId) return false;
     try {
         ensureDirs();
         const file = path.join(ACK_DIR, `${safeId(requestId)}.json`);
+        let ack = { ...body, at: new Date().toISOString() };
+        let raw;
+        try {
+            raw = JSON.stringify(ack);
+        } catch (error) {
+            ack = limitedAck(
+                body,
+                `the route result could not be serialised: ${error.message}`,
+            );
+            raw = JSON.stringify(ack);
+        }
+        if (Buffer.byteLength(raw, "utf8") > MAX_ACK_BYTES) {
+            ack = limitedAck(body, "the route result exceeded the acknowledgement limit");
+            raw = JSON.stringify(ack);
+        }
         // Write then rename, so a reader never sees a half-written ack.
         const tmp = `${file}.tmp`;
-        fs.writeFileSync(tmp, JSON.stringify({ ...body, at: new Date().toISOString() }), "utf8");
+        fs.writeFileSync(tmp, raw, "utf8");
         publish(tmp, file);
+        return true;
     } catch (err) {
         // Nothing here can rescue the CLI's request - it will time out - but a
         // silent swallow left no way to tell "the window never saw it" from
         // "the window did the work and could not say so".
         diag(`porthole could not write the ack for ${requestId}: ${err.message}`);
+        return false;
     }
+}
+
+function limitedAck(body, error) {
+    const metadata = {};
+    for (const key of [
+        "requestId",
+        "operationId",
+        "windowId",
+        "targetStartedAt",
+        "deliveryMode",
+        "disposition",
+    ]) {
+        if (body && Object.prototype.hasOwnProperty.call(body, key)) {
+            metadata[key] = body[key];
+        }
+    }
+    return {
+        ok: false,
+        reason: "result-limit",
+        error,
+        mayHaveExecuted: true,
+        ...metadata,
+        at: new Date().toISOString(),
+    };
 }
 
 /** Request ids come from outside, so never let one escape its directory. */
@@ -150,4 +192,13 @@ function parseQuery(query) {
     return out;
 }
 
-module.exports = { ensureDirs, sweep, readPayload, writeAck, parseQuery, REQ_DIR, ACK_DIR };
+module.exports = {
+    ensureDirs,
+    sweep,
+    readPayload,
+    writeAck,
+    parseQuery,
+    REQ_DIR,
+    ACK_DIR,
+    MAX_ACK_BYTES,
+};

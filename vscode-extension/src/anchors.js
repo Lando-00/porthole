@@ -40,6 +40,17 @@ function readLines(file) {
     }
 }
 
+function anchorFromLines(lines, startLine, endLine) {
+    if (!Array.isArray(lines)) return null;
+    const slice = lines.slice(startLine - 1, endLine);
+    if (slice.length === 0) return null;
+    return {
+        sha256: hash(slice),
+        firstLine: slice[0].trim().slice(0, CONTEXT_CHARS),
+        lastLine: slice[slice.length - 1].trim().slice(0, CONTEXT_CHARS),
+    };
+}
+
 /**
  * A record of what the code said, so a later load can tell whether it still
  * says it.
@@ -50,13 +61,7 @@ function readLines(file) {
 function anchorFor(file, startLine, endLine) {
     const lines = readLines(file);
     if (!lines) return null;
-    const slice = lines.slice(startLine - 1, endLine);
-    if (slice.length === 0) return null;
-    return {
-        sha256: hash(slice),
-        firstLine: slice[0].trim().slice(0, CONTEXT_CHARS),
-        lastLine: slice[slice.length - 1].trim().slice(0, CONTEXT_CHARS),
-    };
+    return anchorFromLines(lines, startLine, endLine);
 }
 
 /**
@@ -109,4 +114,12 @@ function tally() {
     return { resolved: 0, shifted: 0, changed: 0, missing: 0 };
 }
 
-module.exports = { SEARCH_WINDOW, anchorFor, resolve, tally, hash, readLines };
+module.exports = {
+    SEARCH_WINDOW,
+    anchorFor,
+    anchorFromLines,
+    resolve,
+    tally,
+    hash,
+    readLines,
+};

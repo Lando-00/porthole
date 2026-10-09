@@ -1,3 +1,5 @@
+import { sessionIdentity } from "./ownership.mjs";
+
 /**
  * Resolves the current Copilot session lazily.
  *
@@ -16,9 +18,10 @@ export function sessionPath(source) {
 }
 
 export function companionOptions(contextPath, source, extra = {}) {
+    const identity = sessionIdentity({ sessionPath: sessionPath(source) });
     return {
         contextPath,
-        sessionPath: sessionPath(source),
+        ...identity,
         ...extra,
     };
 }

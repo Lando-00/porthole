@@ -19,11 +19,20 @@ function loadTourstore({
     const adopted = [];
     const unloaded = [];
     const warnings = [];
+    let persistenceHandlers = null;
     const loadedTours = new Map(loadedTour ? [[loadedTour.tourId, loadedTour]] : []);
     const tour = {
-        setPersistHandler() {},
+        setPersistenceHandlers(handlers) {
+            persistenceHandlers = handlers;
+        },
         getTour: (tourId) => loadedTours.get(tourId) || null,
         getLibrary: () => ({ tours: [...loadedTours.values()], activeTourId: null }),
+        updateRevisionStates(updates) {
+            for (const update of updates) {
+                const entry = loadedTours.get(update.tourId);
+                if (entry) entry.revisionState = update.revisionState;
+            }
+        },
         has: (tourId) => loadedTours.has(tourId),
         adopt(entry) {
             if (!adoptResult) return false;
@@ -80,6 +89,15 @@ function loadTourstore({
             {
                 projectFolder: () => "C:\\repo",
                 gitHead: () => ({ branch: "main", commit: "abc" }),
+                gitRevisions: async (repos) =>
+                    new Map(repos.map((repo) => [repo, { repo, branch: "main", commit: "abc" }])),
+                revisionState: (publication, revision) =>
+                    publication?.commit && revision?.commit === publication.commit
+                        ? "same-revision"
+                        : publication?.commit && revision?.commit
+                          ? "revision-changed"
+                          : "unknown",
+                normaliseRepo: (repo) => repo || null,
                 storedPath: (file) => file,
                 absoluteFile: (file) => file,
             },
@@ -107,7 +125,13 @@ function loadTourstore({
     } finally {
         Module._load = originalLoad;
     }
-    return { tourstore, adopted, unloaded, warnings };
+    return {
+        tourstore,
+        adopted,
+        unloaded,
+        warnings,
+        getPersistenceHandlers: () => persistenceHandlers,
+    };
 }
 
 function writeTour(sessionDir, tourId, sessionId, overrides = {}) {
@@ -141,7 +165,23 @@ function writeTour(sessionDir, tourId, sessionId, overrides = {}) {
     return file;
 }
 
-test("startup restore refuses a live session that is not in this workspace", () => {
+function writeProgress(sessionDir, tourId, publicationId, current) {
+    const file = path.join(sessionDir, "porthole", "tour-progress", `${tourId}.json`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+        file,
+        JSON.stringify({
+            schema: 1,
+            publicationId,
+            current,
+            updatedAt: "2026-08-21T12:00:00.000Z",
+        }),
+        "utf8",
+    );
+    return file;
+}
+
+test("startup restore refuses a live session that is not in this workspace", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
     const sessionA = { id: "session-a", dir: path.join(root, "session-a"), source: "inuse-lock" };
     try {
@@ -150,7 +190,7 @@ test("startup restore refuses a live session that is not in this workspace", () 
             session: sessionA,
             workspaceSession: null,
         });
-        assert.deepEqual(tourstore.restore(), { restored: 0 });
+        assert.deepEqual(await tourstore.restore(), { restored: 0 });
         assert.equal(adopted.length, 0);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
@@ -191,7 +231,19 @@ test("a foreign in-memory Tour cannot be saved by the current session", () => {
             workspaceSession: sessionB,
             loadedTour,
         });
-        const result = tourstore.save("borrowed-tour");
+        const result = tourstore.publish({
+            ...loadedTour,
+            publication: {
+                id: "publication-a",
+                at: "2026-01-01T00:00:00.000Z",
+                repo: "C:\\repo",
+                commit: null,
+            },
+            steps: loadedTour.steps.map((step) => ({
+                ...step,
+                anchor: { sha256: "original-anchor" },
+            })),
+        });
         assert.equal(result.ok, false);
         assert.match(result.error, /owned by another Copilot session/);
         assert.equal(
@@ -204,7 +256,7 @@ test("a foreign in-memory Tour cannot be saved by the current session", () => {
     }
 });
 
-test("restore skips a legacy copied tour older than its claimed session", () => {
+test("restore skips a legacy copied tour older than its claimed session", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
     const session = { id: "session-b", dir: path.join(root, "session-b"), source: "workspace" };
     try {
@@ -218,32 +270,40 @@ test("restore skips a legacy copied tour older than its claimed session", () => 
             session,
             workspaceSession: session,
         });
-        assert.deepEqual(tourstore.restore(), { restored: 0 });
+        assert.deepEqual(await tourstore.restore(), { restored: 0 });
         assert.equal(adopted.length, 0);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
 
-test("ordinary Tour Library listing excludes sibling-session Tours", () => {
+test("ordinary Tour Library listing excludes sibling-session Tours", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
     const sessionA = { id: "session-a", dir: path.join(root, "session-a"), source: "workspace" };
     const sessionB = { id: "session-b", dir: path.join(root, "session-b"), source: "workspace" };
     try {
-        writeTour(sessionA.dir, "current-tour", sessionA.id);
+        writeTour(sessionA.dir, "current-tour", sessionA.id, {
+            publication: {
+                id: "publication-list",
+                at: "2026-01-01T00:00:00.000Z",
+                repo: "C:\\repo",
+                commit: "abc",
+            },
+        });
         writeTour(sessionB.dir, "other-tour", sessionB.id);
         const { tourstore } = loadTourstore({
             session: sessionA,
             workspaceSession: sessionA,
         });
 
-        const result = tourstore.list({});
+        const result = await tourstore.list({});
 
         assert.equal(result.ok, true);
         assert.deepEqual(
             result.result.tours.map((tour) => tour.tourId),
             ["current-tour"],
         );
+        assert.equal(result.result.tours[0].revisionState, "same-revision");
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
@@ -277,6 +337,12 @@ test("deleting a Tour leaves a sibling session's same-ID Tour untouched", () => 
     try {
         const fileA = writeTour(sessionA.dir, "shared-tour", sessionA.id);
         const fileB = writeTour(sessionB.dir, "shared-tour", sessionB.id);
+        const progressA = writeProgress(
+            sessionA.dir,
+            "shared-tour",
+            "legacy-progress",
+            0,
+        );
         const { tourstore } = loadTourstore({
             session: sessionA,
             workspaceSession: sessionA,
@@ -287,23 +353,33 @@ test("deleting a Tour leaves a sibling session's same-ID Tour untouched", () => 
         assert.equal(result.ok, true);
         assert.deepEqual(result.result.deleted, [fileA]);
         assert.equal(fs.existsSync(fileA), false);
+        assert.equal(fs.existsSync(progressA), false);
         assert.equal(fs.existsSync(fileB), true);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
 
-test("resuming the same Copilot session restores its Tour cursor without activating it", () => {
+test("resuming the same Copilot session restores its Tour cursor without activating it", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
     const session = { id: "session-a", dir: path.join(root, "session-a"), source: "workspace" };
     try {
-        writeTour(session.dir, "resume-tour", session.id);
+        writeTour(session.dir, "resume-tour", session.id, {
+            current: -1,
+            publication: {
+                id: "publication-resume",
+                at: "2026-01-01T00:00:00.000Z",
+                repo: "C:\\repo",
+                commit: "abc",
+            },
+        });
+        writeProgress(session.dir, "resume-tour", "publication-resume", 0);
         const { tourstore, adopted } = loadTourstore({
             session,
             workspaceSession: session,
         });
 
-        assert.deepEqual(tourstore.restore(), { restored: 1 });
+        assert.deepEqual(await tourstore.restore(), { restored: 1 });
         assert.equal(adopted.length, 1);
         assert.equal(adopted[0].tourId, "resume-tour");
         assert.equal(adopted[0].current, 0);
@@ -312,7 +388,34 @@ test("resuming the same Copilot session restores its Tour cursor without activat
     }
 });
 
-test("a forked Copilot session does not inherit its parent's Tour Library", () => {
+test("progress from an older publication cannot move a refreshed Tour", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
+    const session = { id: "session-a", dir: path.join(root, "session-a"), source: "workspace" };
+    try {
+        writeTour(session.dir, "refreshed-tour", session.id, {
+            current: -1,
+            publication: {
+                id: "publication-new",
+                at: "2026-08-21T12:00:00.000Z",
+                repo: "C:\\repo",
+                commit: "abc",
+            },
+        });
+        writeProgress(session.dir, "refreshed-tour", "publication-old", 0);
+        const { tourstore, adopted } = loadTourstore({
+            session,
+            workspaceSession: session,
+        });
+
+        assert.deepEqual(await tourstore.restore(), { restored: 1 });
+        assert.equal(adopted[0].current, -1);
+        assert.equal(adopted[0].publicationId, "publication-new");
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test("a forked Copilot session does not inherit its parent's Tour Library", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
     const parent = { id: "session-parent", dir: path.join(root, "session-parent") };
     const fork = { id: "session-fork", dir: path.join(root, "session-fork"), source: "workspace" };
@@ -324,7 +427,7 @@ test("a forked Copilot session does not inherit its parent's Tour Library", () =
             workspaceSession: fork,
         });
 
-        assert.deepEqual(tourstore.restore(), { restored: 0 });
+        assert.deepEqual(await tourstore.restore(), { restored: 0 });
         assert.deepEqual(adopted, []);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
@@ -341,7 +444,7 @@ test("a foreign-owned record inside the session folder is never library authorit
             workspaceSession: session,
         });
 
-        assert.deepEqual(tourstore.list({}).result.tours, []);
+        assert.deepEqual((await tourstore.list({})).result.tours, []);
         assert.equal((await tourstore.activateTour({ tourId: "misplaced-tour" })).ok, false);
         assert.equal(tourstore.remove({ tourId: "misplaced-tour" }).ok, false);
         assert.equal(fs.existsSync(foreignFile), true);
@@ -351,7 +454,7 @@ test("a foreign-owned record inside the session folder is never library authorit
     }
 });
 
-test("Saved Tour Discovery reports historical Tours without loading them", () => {
+test("Saved Tour Discovery reports historical Tours without loading them", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
     const current = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
     const historical = { id: "session-old", dir: path.join(root, "session-old") };
@@ -397,7 +500,7 @@ test("Saved Tour Discovery reports historical Tours without loading them", () =>
         }]);
         assert.deepEqual(adopted, []);
         assert.deepEqual(
-            tourstore.list({}).result.tours.map((tour) => tour.tourId),
+            (await tourstore.list({})).result.tours.map((tour) => tour.tourId),
             ["current-tour"],
         );
     } finally {
@@ -411,8 +514,16 @@ test("import creates an independent session-owned Tour with provenance and a saf
     const historical = { id: "session-old", dir: path.join(root, "session-old") };
     try {
         writeTour(current.dir, "auth-path", current.id, { title: "Current auth" });
+        const publication = {
+            id: "publication-source",
+            at: "2026-01-01T00:00:00.000Z",
+            repo: "C:\\repo",
+            commit: "a".repeat(40),
+        };
         const sourceFile = writeTour(historical.dir, "auth-path", historical.id, {
             title: "Historical auth",
+            commit: publication.commit,
+            publication,
         });
 
         const sourceBefore = fs.readFileSync(sourceFile, "utf8");
@@ -442,11 +553,31 @@ test("import creates an independent session-owned Tour with provenance and a saf
             sourceTourId: "auth-path",
             importedAt: "2026-08-21T12:00:00.000Z",
         });
+        assert.deepEqual(imported.publication, publication);
+        assert.equal(imported.commit, publication.commit);
         assert.equal(fs.readFileSync(sourceFile, "utf8"), sourceBefore);
         assert.equal(adopted.at(-1).tourId, "auth-path-2");
         assert.equal(adopted.at(-1).sourceFile, undefined);
         assert.equal(adopted.at(-1).sourceSessionId, current.id);
-        assert.equal(tourstore.save("auth-path-2").ok, true);
+        const canonicalBeforeProgress = fs.readFileSync(importedFile, "utf8");
+        adopted.at(-1).current = 0;
+        assert.equal(tourstore.saveProgress("auth-path-2").ok, true);
+        assert.equal(fs.readFileSync(importedFile, "utf8"), canonicalBeforeProgress);
+        const progress = JSON.parse(
+            fs.readFileSync(
+                path.join(
+                    current.dir,
+                    "porthole",
+                    "tour-progress",
+                    "auth-path-2.json",
+                ),
+                "utf8",
+            ),
+        );
+        assert.equal(progress.schema, 1);
+        assert.equal(progress.publicationId, adopted.at(-1).publicationId);
+        assert.equal(progress.current, 0);
+        assert.match(progress.updatedAt, /^\d{4}-\d{2}-\d{2}T/);
         assert.deepEqual(
             JSON.parse(fs.readFileSync(importedFile, "utf8")).provenance,
             imported.provenance,
@@ -498,42 +629,55 @@ test("replacing an imported Tour requires explicit confirmation and never change
     }
 });
 
-test("Archive Tour is durable, hidden by default, and reversible", () => {
+test("Archive Tour is durable, hidden by default, and reversible", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
     const session = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
     try {
-        const file = writeTour(session.dir, "auth-path", session.id);
+        const publication = {
+            id: "publication-archive",
+            at: "2026-08-21T12:00:00.000Z",
+            repo: "C:\\repo",
+            commit: "abc",
+        };
+        const file = writeTour(session.dir, "auth-path", session.id, {
+            current: -1,
+            publication,
+        });
+        writeProgress(session.dir, "auth-path", publication.id, 0);
         const { tourstore, unloaded, adopted } = loadTourstore({
             session,
             workspaceSession: session,
         });
 
-        const archived = tourstore.setArchived({
+        const archived = await tourstore.setArchived({
             tourId: "auth-path",
             archived: true,
             archivedAt: "2026-08-21T13:00:00.000Z",
         });
         assert.equal(archived.ok, true);
         assert.deepEqual(unloaded, ["auth-path"]);
-        assert.deepEqual(tourstore.list({}).result.tours, []);
+        assert.deepEqual((await tourstore.list({})).result.tours, []);
         assert.deepEqual(
-            tourstore.list({ includeArchived: true }).result.tours.map((tour) => ({
+            (await tourstore.list({ includeArchived: true })).result.tours.map((tour) => ({
                 tourId: tour.tourId,
                 archivedAt: tour.archivedAt,
             })),
             [{ tourId: "auth-path", archivedAt: "2026-08-21T13:00:00.000Z" }],
         );
         assert.equal(fs.existsSync(file), true);
-        assert.deepEqual(tourstore.restore(), { restored: 0 });
+        const archivedRecord = JSON.parse(fs.readFileSync(file, "utf8"));
+        assert.equal(archivedRecord.current, -1);
+        assert.deepEqual(archivedRecord.publication, publication);
+        assert.deepEqual(await tourstore.restore(), { restored: 0 });
 
-        const unarchived = tourstore.setArchived({
+        const unarchived = await tourstore.setArchived({
             tourId: "auth-path",
             archived: false,
         });
         assert.equal(unarchived.ok, true);
         assert.equal(adopted.at(-1).tourId, "auth-path");
         assert.deepEqual(
-            tourstore.list({}).result.tours.map((tour) => tour.tourId),
+            (await tourstore.list({})).result.tours.map((tour) => tour.tourId),
             ["auth-path"],
         );
         assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).archivedAt, undefined);
@@ -542,7 +686,7 @@ test("Archive Tour is durable, hidden by default, and reversible", () => {
     }
 });
 
-test("archiving a Tour cannot change a sibling session's same-ID Tour", () => {
+test("archiving a Tour cannot change a sibling session's same-ID Tour", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
     const current = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
     const sibling = { id: "session-sibling", dir: path.join(root, "session-sibling") };
@@ -555,7 +699,10 @@ test("archiving a Tour cannot change a sibling session's same-ID Tour", () => {
             workspaceSession: current,
         });
 
-        assert.equal(tourstore.setArchived({ tourId: "shared-tour", archived: true }).ok, true);
+        assert.equal(
+            (await tourstore.setArchived({ tourId: "shared-tour", archived: true })).ok,
+            true,
+        );
         assert.equal(Boolean(JSON.parse(fs.readFileSync(currentFile, "utf8")).archivedAt), true);
         assert.equal(fs.readFileSync(siblingFile, "utf8"), siblingBefore);
     } finally {
@@ -563,7 +710,7 @@ test("archiving a Tour cannot change a sibling session's same-ID Tour", () => {
     }
 });
 
-test("unarchive rolls back when the Tour cannot return to the in-memory library", () => {
+test("unarchive rolls back when the Tour cannot return to the in-memory library", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-session-"));
     const session = { id: "session-current", dir: path.join(root, "session-current"), source: "workspace" };
     try {
@@ -576,7 +723,7 @@ test("unarchive rolls back when the Tour cannot return to the in-memory library"
             adoptResult: false,
         });
 
-        const result = tourstore.setArchived({ tourId: "auth-path", archived: false });
+        const result = await tourstore.setArchived({ tourId: "auth-path", archived: false });
 
         assert.equal(result.ok, false);
         assert.match(result.error, /library is full/);
@@ -584,7 +731,7 @@ test("unarchive rolls back when the Tour cannot return to the in-memory library"
             JSON.parse(fs.readFileSync(file, "utf8")).archivedAt,
             "2026-08-21T13:00:00.000Z",
         );
-        assert.deepEqual(tourstore.list({}).result.tours, []);
+        assert.deepEqual((await tourstore.list({})).result.tours, []);
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }

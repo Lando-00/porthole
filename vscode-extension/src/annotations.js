@@ -34,6 +34,7 @@ let decorationTypes = null;
 let statusBar = null;
 let extensionUri = null;
 let cursor = -1;
+let source = null;
 
 function key(fsPath) {
     return process.platform === "win32" ? fsPath.toLowerCase() : fsPath;
@@ -80,11 +81,11 @@ function disposeDecorationTypes() {
     decorationTypes = null;
 }
 
-function normalise(entry, index) {
+function normalise(entry, index, options = {}) {
     const severity = SEVERITIES.includes(entry.severity) ? entry.severity : "info";
     const startLine = toInt(entry.startLine, 1);
     const endLine = toInt(entry.endLine, startLine);
-    return {
+    const normalised = {
         index,
         file: entry.file,
         startLine,
@@ -94,6 +95,20 @@ function normalise(entry, index) {
         severity,
         message: typeof entry.message === "string" ? entry.message : "",
     };
+    if (options.preserveEvidence) {
+        const authored = entry.authored || {};
+        normalised.inheritedEvidence = true;
+        normalised.authored = {
+            severity: SEVERITIES.includes(authored.severity) ? authored.severity : severity,
+            message: typeof authored.message === "string" ? authored.message : "",
+            stepTitle:
+                typeof authored.stepTitle === "string" ? authored.stepTitle : undefined,
+            narration:
+                typeof authored.narration === "string" ? authored.narration : undefined,
+            anchor: authored.anchor?.sha256 ? authored.anchor : null,
+        };
+    }
+    return normalised;
 }
 
 function toInt(value, fallback) {
@@ -159,6 +174,14 @@ function updateStatusBar() {
  * one; passing false lets a caller build a set up across several calls.
  */
 async function annotate(payload) {
+    return applyAnnotations(payload, { preserveEvidence: false });
+}
+
+async function restore(payload) {
+    return applyAnnotations(payload, { preserveEvidence: true });
+}
+
+async function applyAnnotations(payload, options) {
     const incoming = Array.isArray(payload.annotations) ? payload.annotations : [];
     const clearExisting = payload.clearExisting !== false;
 
@@ -167,6 +190,11 @@ async function annotate(payload) {
         title = payload.title || null;
     } else if (payload.title) {
         title = payload.title;
+    }
+    if (options.preserveEvidence) {
+        source = payload.source || null;
+    } else {
+        source = null;
     }
 
     const accepted = [];
@@ -177,7 +205,7 @@ async function annotate(payload) {
             rejected.push("entry without a 'file'");
             continue;
         }
-        const entry = normalise(raw, ordered.length + accepted.length);
+        const entry = normalise(raw, ordered.length + accepted.length, options);
         accepted.push(entry);
     }
 
@@ -242,7 +270,7 @@ async function revealEntry(entry) {
 
 /** The current set, for saving a review. */
 function getState() {
-    return { title, entries: ordered, current: cursor };
+    return { title, entries: ordered, current: cursor, source };
 }
 
 function clearState() {
@@ -250,6 +278,7 @@ function clearState() {
     ordered = [];
     cursor = -1;
     title = null;
+    source = null;
 }
 
 function clear() {
@@ -345,4 +374,12 @@ function republish() {
     diagnostics.publish("annotations", ordered);
 }
 
-module.exports = { activate, annotate, clear, applyToAllVisible, getState, republish };
+module.exports = {
+    activate,
+    annotate,
+    restore,
+    clear,
+    applyToAllVisible,
+    getState,
+    republish,
+};

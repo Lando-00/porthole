@@ -24,13 +24,16 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { randomUUID } = require("node:crypto");
 
 const vscode = require("vscode");
 
 const { diag } = require("./log");
 const { clampRange } = require("./reveal");
 const diagnostics = require("./diagnostics");
-const { projectFolder, gitHead, normaliseSlug } = require("./repo");
+const anchors = require("./anchors");
+const { gitRevision, normaliseRepo, normaliseSlug } = require("./repo");
+const { findWorkspaceSession } = require("./session");
 
 const MAX_STEPS = 50;
 const MAX_NARRATION = 2000;
@@ -61,10 +64,14 @@ const stateChanged = new vscode.EventEmitter();
 const onDidChangeState = stateChanged.event;
 
 /** Set by tourstore once it is wired up, to avoid a require cycle. */
-let onPersist = null;
+let persistence = { publication: null, progress: null };
 
-function setPersistHandler(fn) {
-    onPersist = fn;
+function setPersistenceHandlers(handlers = {}) {
+    persistence = {
+        publication:
+            typeof handlers.publication === "function" ? handlers.publication : null,
+        progress: typeof handlers.progress === "function" ? handlers.progress : null,
+    };
 }
 
 // --- state ------------------------------------------------------------------
@@ -104,6 +111,28 @@ function has(tourId) {
     return tours.has(tourId);
 }
 
+function ownsPresentation(entry) {
+    const session = findWorkspaceSession();
+    return Boolean(session && entry.sourceSessionId === session.id &&
+        (!entry.sourceSessionPath || path.relative(entry.sourceSessionPath, session.dir) === ""));
+}
+
+function presentationRefusal() {
+    return { ok: false, reason: "ownership-refused", error: "the Tour is not owned by this window's current Copilot session" };
+}
+
+/** Advisory refreshes update the sidebar, not the current step or its anchors. */
+function updateRevisionStates(updates) {
+    let updated = false;
+    for (const update of updates) {
+        const entry = tours.get(update.tourId);
+        if (!entry || (entry.publication?.id || entry.publicationId) !== update.publicationId) continue;
+        if (entry.revisionState === update.revisionState) continue;
+        entry.revisionState = update.revisionState;
+        updated = true;
+    }
+    if (updated) stateChanged.fire(getState());
+}
 
 /**
  * Announces a state change once, to every surface.
@@ -112,19 +141,24 @@ function has(tourId) {
  * document changes as well would re-render the lenses on every keystroke, which
  * reads as flicker.
  */
-function changed({ persist } = {}) {
+function changed({ progress } = {}) {
     lensChanged.fire();
     stateChanged.fire(getState());
     updateStatusBar();
     applyToAllVisible();
     void vscode.commands.executeCommand("setContext", "porthole.tourActive", isActive());
     void vscode.commands.executeCommand("setContext", "porthole.tourLibrary", tours.size > 0);
-    if (persist && onPersist) onPersist(persist);
+    if (progress && persistence.progress) persistence.progress(progress);
 }
 
-function normalise(raw, index) {
+function normalise(raw, index, options = {}) {
     const startLine = toInt(raw.startLine, 1);
     const endLine = Math.max(startLine, toInt(raw.endLine, startLine));
+    const status =
+        options.preserveStatus &&
+        ["resolved", "shifted", "changed", "missing"].includes(raw.status)
+            ? raw.status
+            : null;
     return {
         index,
         file: raw.file,
@@ -136,13 +170,12 @@ function normalise(raw, index) {
         // Only set on a step that came off disk. Carried through so a restored
         // tour can still say which of its steps have drifted - dropping it here
         // was how a tour loaded from three commits ago looked perfectly current.
-        ...(["resolved", "shifted", "changed", "missing"].includes(raw.status)
-            ? { status: raw.status }
-            : {}),
+        ...(status ? { status } : {}),
         // Likewise carried rather than recomputed. The anchor records what the
         // narration was written about; re-deriving it from whatever now sits at
         // the step would quietly turn a stale tour into a current-looking one.
         ...(raw.anchor && raw.anchor.sha256 ? { anchor: raw.anchor } : {}),
+        ...(options.inheritedEvidence ? { inheritedEvidence: true } : {}),
     };
 }
 
@@ -213,20 +246,23 @@ function slugFor(payload) {
     if (!tours.has(base)) return base;
 
     for (let n = 2; n < 1000; n += 1) {
-        const candidate = `${base}-${n}`.slice(0, 64);
+        const suffix = `-${n}`;
+        const candidate = `${base.slice(0, 64 - suffix.length)}${suffix}`;
         if (!tours.has(candidate)) return candidate;
     }
-    return `${base}-${Date.now()}`.slice(0, 64);
+    return `${base.slice(0, 51)}-${randomUUID().slice(0, 12)}`;
 }
 
 /**
  * Adds a tour to the library, or replaces one with the same id.
  *
- * Replacing is explicit: without `replace`, an existing id is refused rather
- * than silently overwritten, because losing an explanation you had already
- * walked is worse than being told to pick another name.
+ * Naming an existing id requests replacement unless `replace` is false.
+ * An automatically derived title must not replace an archived or unloaded Tour.
  */
 async function upsert(payload = {}) {
+    const session = findWorkspaceSession();
+    if (!session) return { ok: false, error: "no Copilot session is bound to this window" };
+    const expectedSession = { id: session.id, dir: session.dir };
     const incoming = Array.isArray(payload.steps) ? payload.steps : [];
     if (incoming.length === 0) return { ok: false, error: "a tour needs at least one step" };
     if (incoming.length > MAX_STEPS) {
@@ -251,6 +287,7 @@ async function upsert(payload = {}) {
 
     const accepted = [];
     const skipped = [];
+    const sourceLines = new Map();
 
     for (const [i, raw] of incoming.entries()) {
         if (!raw || !raw.file) {
@@ -264,38 +301,126 @@ async function upsert(payload = {}) {
             skipped.push({ index: i, reason: `file not found: ${raw.file}` });
             continue;
         }
-        accepted.push(normalise({ ...raw, file }, accepted.length));
+
+        const authored = normalise(
+            {
+                file,
+                startLine: raw.startLine,
+                endLine: raw.endLine,
+                stepTitle: raw.stepTitle,
+                narration: raw.narration,
+                severity: raw.severity,
+            },
+            accepted.length,
+        );
+        if (!sourceLines.has(file)) sourceLines.set(file, anchors.readLines(file));
+        const lines = sourceLines.get(file);
+        if (Array.isArray(lines)) {
+            authored.endLine = Math.min(authored.endLine, lines.length);
+        }
+        const anchor = anchors.anchorFromLines(
+            lines,
+            authored.startLine,
+            authored.endLine,
+        );
+        if (!anchor) {
+            skipped.push({
+                index: i,
+                reason: `could not capture saved source evidence from ${file}`,
+            });
+            continue;
+        }
+        authored.anchor = anchor;
+        accepted.push(authored);
     }
 
     if (accepted.length === 0) {
         return { ok: false, error: "no step could be resolved", result: { steps: 0, skipped } };
     }
 
-    const repo = projectFolder();
-    const head = repo ? gitHead(repo) : { branch: null, commit: null };
-    const now = new Date().toISOString();
+    if (!persistence.publication) {
+        return { ok: false, error: "Tour publication storage is unavailable" };
+    }
 
-    tours.set(tourId, {
+    const repo = normaliseRepo(payload.sourceRepo);
+    const head = await gitRevision(repo);
+    const now = new Date().toISOString();
+    const entry = {
         tourId,
         title: text(payload.title, 200) || existing?.title || tourId,
         steps: accepted,
         current: -1,
         endpointId: payload.endpointId || existing?.endpointId || null,
+        sourceSessionId: expectedSession.id,
+        sourceSessionPath: expectedSession.dir,
         repo,
         branch: head.branch,
         commit: head.commit,
         createdAt: existing?.createdAt || now,
         updatedAt: now,
+        publication: {
+            id: randomUUID(),
+            at: now,
+            repo,
+            commit: head.commit,
+        },
+        revisionState: head.commit ? "same-revision" : "unknown",
+    };
+
+    const persisted = await persistence.publication(entry, {
+        replace: Boolean(payload.tourId) && payload.replace !== false,
+        expectedSession,
+    });
+    if (!persisted?.ok) {
+        return {
+            ok: false,
+            error: persisted?.error || "could not save the Tour publication",
+            result: { tourId, steps: accepted.length, skipped, saved: false },
+        };
+    }
+
+    Object.assign(entry, {
+        createdAt: persisted.result?.createdAt || entry.createdAt,
+        updatedAt: persisted.result?.updatedAt || entry.updatedAt,
+        sourceFile: persisted.result?.file,
+        sourceSessionId: persisted.result?.sessionId,
+        publicationId: entry.publication.id,
     });
 
+    if (activeTourId === tourId) {
+        activeTourId = null;
+        clearDecorations();
+    }
+    tours.set(tourId, entry);
+
     publishTour(tourId);
+    changed();
 
     const activate = payload.activate !== false && payload.start !== false;
     if (activate) {
-        activeTourId = tourId;
-        await goto(0);
-    } else {
-        changed({ persist: tourId });
+        const activation = await activateTour(tourId, 0);
+        if (!activation.ok) {
+            diag(
+                `tour ${existing ? "replaced" : "added"} but not displayed: ${tourId} ` +
+                    `(${activation.error || activation.reason})`,
+            );
+            return {
+                ok: false,
+                reason: activation.reason || "display-failed",
+                error: activation.error || "the Tour was saved but its first step was not shown",
+                result: {
+                    tourId,
+                    replaced: Boolean(existing),
+                    steps: accepted.length,
+                    skipped,
+                    saved: true,
+                    displayed: false,
+                    active: false,
+                    library: tours.size,
+                    file: persisted.result?.file,
+                },
+            };
+        }
     }
 
     diag(
@@ -311,6 +436,10 @@ async function upsert(payload = {}) {
             steps: accepted.length,
             skipped,
             active: activeTourId === tourId,
+            saved: true,
+            displayed: activate,
+            file: persisted.result?.file,
+            publication: entry.publication,
             library: tours.size,
         },
     };
@@ -350,13 +479,12 @@ async function goto(index) {
     const tour = active();
     if (!tour) {
         vscode.window.showInformationMessage("porthole: no tour is running.");
-        return false;
+        return { ok: false, error: "no tour is running" };
     }
-    if (index < 0 || index >= tour.steps.length) return false;
-
-    tour.current = index;
-    tour.updatedAt = new Date().toISOString();
-    changed({ persist: tour.tourId });
+    if (!ownsPresentation(tour)) return presentationRefusal();
+    if (!Number.isInteger(index) || index < 0 || index >= tour.steps.length) {
+        return { ok: false, error: `step ${index} is outside this Tour` };
+    }
 
     const entry = tour.steps[index];
     if (entry.status === "missing") {
@@ -366,9 +494,29 @@ async function goto(index) {
         vscode.window.showInformationMessage(
             `porthole: step ${index + 1} points at ${entry.file}, which is not in this checkout.`,
         );
-        return false;
+        return {
+            ok: false,
+            reason: "missing",
+            error: `step ${index + 1} points at a file that is not in this checkout`,
+            file: entry.file,
+        };
     }
-    return revealStep(entry);
+
+    const revealed = await revealStep(entry, tour);
+    if (!revealed.ok) return revealed;
+
+    tour.current = index;
+    tour.updatedAt = new Date().toISOString();
+    changed({ progress: tour.tourId });
+    return {
+        ok: true,
+        result: {
+            tourId: tour.tourId,
+            current: index,
+            file: entry.file,
+            displayed: true,
+        },
+    };
 }
 
 async function step(delta) {
@@ -391,19 +539,42 @@ async function step(delta) {
 async function activateTour(tourId, stepIndex) {
     const tour = tours.get(tourId);
     if (!tour) return { ok: false, error: `no tour called '${tourId}' is loaded` };
+    if (!ownsPresentation(tour)) return presentationRefusal();
 
-    activeTourId = tourId;
     const index = Number.isInteger(stepIndex)
         ? Math.max(0, Math.min(tour.steps.length - 1, stepIndex))
         : tour.current >= 0
           ? tour.current
           : 0;
 
-    await goto(index);
+    const entry = tour.steps[index];
+    if (entry.status === "missing") {
+        return {
+            ok: false,
+            reason: "missing",
+            error: `step ${index + 1} points at a file that is not in this checkout`,
+            file: entry.file,
+        };
+    }
+
+    const revealed = await revealStep(entry, tour);
+    if (!revealed.ok) return revealed;
+
+    activeTourId = tourId;
+    tour.current = index;
+    tour.updatedAt = new Date().toISOString();
+    changed({ progress: tourId });
     diag(`tour activated: ${tourId} at step ${index + 1}/${tour.steps.length}`);
     return {
         ok: true,
-        result: { tourId, title: tour.title, steps: tour.steps.length, current: tour.current },
+        result: {
+            tourId,
+            title: tour.title,
+            steps: tour.steps.length,
+            current: tour.current,
+            displayed: true,
+            revisionState: tour.revisionState || "unknown",
+        },
     };
 }
 
@@ -475,7 +646,9 @@ function adopt(tour) {
     }
     if (!tours.has(tour.tourId) && tours.size >= MAX_TOURS) return false;
 
-    const steps = tour.steps.map((s, i) => normalise(s, i));
+    const steps = tour.steps.map((s, i) =>
+        normalise(s, i, { preserveStatus: true, inheritedEvidence: true }),
+    );
     const current = Number.isInteger(tour.current)
         ? Math.max(-1, Math.min(steps.length - 1, tour.current))
         : -1;
@@ -486,25 +659,41 @@ function adopt(tour) {
     return true;
 }
 
-async function revealStep(entry) {
+async function revealStep(entry, owner) {
     let document;
     try {
         document = await vscode.workspace.openTextDocument(vscode.Uri.file(entry.file));
     } catch (err) {
         diag(`tour reveal failed: ${err.message}`);
         vscode.window.showWarningMessage(`porthole: could not open ${entry.file}`);
-        return false;
+        return { ok: false, reason: "display-failed", error: `could not open ${entry.file}` };
     }
 
-    const editor = await vscode.window.showTextDocument(document, {
-        preview: false,
-        preserveFocus: false,
-    });
+    if (!ownsPresentation(owner)) return presentationRefusal();
+    if (document.isDirty) {
+        const error = `save ${entry.file} before showing this Tour step`;
+        vscode.window.showWarningMessage(`porthole: ${error}.`);
+        return { ok: false, reason: "requires-save", error, file: entry.file };
+    }
+
+    let editor;
+    try {
+        editor = await vscode.window.showTextDocument(document, {
+            preview: false,
+            preserveFocus: false,
+        });
+    } catch (err) {
+        diag(`tour display failed: ${err.message}`);
+        return {
+            ok: false,
+            reason: "display-failed",
+            error: `could not show ${entry.file}: ${err.message}`,
+        };
+    }
     const range = clampRange(document, entry.startLine, entry.endLine, 1, undefined);
     editor.selection = new vscode.Selection(range.start, range.start);
     editor.revealRange(range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
-    applyTo(editor);
-    return true;
+    return { ok: true, result: { file: entry.file } };
 }
 
 async function list() {
@@ -584,6 +773,11 @@ function applyTo(editor) {
     if (!editor) return;
     if (!decorations) buildDecorations();
 
+    if (editor.document.isDirty) {
+        for (const type of Object.values(decorations)) editor.setDecorations(type, []);
+        return;
+    }
+
     const tour = active();
     // The gutter follows the active tour only. Painting every loaded tour would
     // put three different "step 1" markers on the same line with no way to tell
@@ -657,7 +851,7 @@ const lensProvider = {
 
     provideCodeLenses(document) {
         const tour = active();
-        if (!tour || tour.steps.length === 0) return [];
+        if (!tour || tour.steps.length === 0 || document.isDirty) return [];
 
         const { steps, current } = tour;
         const mine = steps.filter((s) => samePath(s.file, document.uri.fsPath));
@@ -821,8 +1015,9 @@ module.exports = {
     adopt,
     getLibrary,
     getTour,
+    updateRevisionStates,
     has,
-    setPersistHandler,
+    setPersistenceHandlers,
     republishAll,
     // the active tour
     exit,

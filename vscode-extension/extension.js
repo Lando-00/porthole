@@ -42,6 +42,8 @@ const { createDispatcher } = require("./src/dispatcher");
 const capabilities = require("./src/capabilities");
 const { createSessionBinding } = require("./src/binding");
 const sessionState = require("./src/session");
+const { createExecutionBudget } = require("./src/operations");
+const executionBudget = createExecutionBudget();
 
 const VERSION = require("./package.json").version;
 const sessionBinding = createSessionBinding({
@@ -69,6 +71,10 @@ const PAYLOAD_OPTIONAL = new Set([
     "review-list",
     "focus",
 ]);
+
+let hostWindowId = null;
+let hostStartedAt = null;
+const warnedLegacyBindings = new Set();
 
 async function dispatch(route, payload) {
     switch (route) {
@@ -162,14 +168,14 @@ async function dispatch(route, payload) {
 
 /**
  * URI and exact-window inbox transports enter the same dispatcher. The
- * dispatcher owns route validation, error normalization and acknowledgement;
- * this adapter adds the production presence and presentation effects.
+ * dispatcher owns route validation and error normalization. The URI adapter
+ * writes its legacy acknowledgement; the addressed inbox owns guarded
+ * per-attempt acknowledgement and replay.
  */
 const executeRequest = createDispatcher({
     knownRoutes: KNOWN,
     optionalPayloadRoutes: PAYLOAD_OPTIONAL,
     dispatch,
-    writeAck: transport.writeAck,
     diag: log.diag,
     warn: (error) => vscode.window.showWarningMessage(`porthole: ${error}`),
     onHandled: () => {
@@ -180,6 +186,41 @@ const executeRequest = createDispatcher({
     },
 });
 
+function legacyAck(result, requestId, disposition = "executed") {
+    return {
+        ...result,
+        requestId,
+        operationId: null,
+        windowId: hostWindowId,
+        targetStartedAt: hostStartedAt,
+        deliveryMode: "legacy-single-shot",
+        disposition,
+    };
+}
+
+function warnLegacyOnce() {
+    const binding = sessionBinding.current();
+    const key = JSON.stringify([
+        binding.state,
+        binding.sessionId || "",
+        binding.sessionFolder || "",
+        (binding.sessionFolders || []).map((entry) => entry.sessionFolder).sort(),
+    ]);
+    if (warnedLegacyBindings.has(key)) return;
+    warnedLegacyBindings.add(key);
+    try {
+        const shown = vscode.window.showWarningMessage(
+            "porthole: this request used legacy single-shot delivery. Receiver-side session " +
+                "ownership checks and automatic deduplicated retries require an updated CLI plugin.",
+        );
+        if (shown && typeof shown.catch === "function") {
+            shown.catch((error) => log.diag(`legacy compatibility warning failed: ${error.message}`));
+        }
+    } catch (error) {
+        log.diag(`legacy compatibility warning failed: ${error.message}`);
+    }
+}
+
 async function handleUri(uri) {
     const route = (uri.path || "").replace(/^\/+/, "").toLowerCase();
     const query = transport.parseQuery(uri.query);
@@ -188,10 +229,34 @@ async function handleUri(uri) {
     // Payload-file routes carry only `req`; legacy /reveal carries its
     // parameters inline. Falling back to the query keeps both working.
     const payload = requestId ? transport.readPayload(requestId) : query;
-    return executeRequest(route, payload, requestId, "uri");
+    const releaseExecution = executionBudget.acquire();
+    let result;
+    if (!releaseExecution) {
+        result = { ok: false, reason: "busy", error: "the companion execution budget is full" };
+        if (!requestId) vscode.window.showWarningMessage(`porthole: ${result.error}`);
+    } else {
+        try {
+            result = await executeRequest(route, payload, requestId, "uri");
+        } finally {
+            releaseExecution();
+        }
+    }
+    if (requestId) {
+        warnLegacyOnce();
+        transport.writeAck(requestId, legacyAck(result, requestId, releaseExecution ? "executed" : "rejected"));
+    }
+    return result;
 }
 
-function handleInboxRequest(request) {
+function handleInboxRequest(request, delivery = {}) {
+    const diagnosticUnboundProbe =
+        delivery.legacyReason === "unbound-inspection" && request.route === "ping";
+    if (
+        delivery.deliveryMode === "legacy-single-shot" &&
+        !diagnosticUnboundProbe
+    ) {
+        warnLegacyOnce();
+    }
     return executeRequest(request.route, request.payload, request.requestId, "inbox");
 }
 
@@ -203,6 +268,9 @@ function activate(context) {
     transport.sweep();
 
     const windowId = presence.start(vscode, context, VERSION, PRESENCE_CONTRACT);
+    const host = presence.describe(vscode, VERSION, PRESENCE_CONTRACT);
+    hostWindowId = windowId;
+    hostStartedAt = host.startedAt;
     // Before annotations: publishing an annotation needs the collection to
     // exist already.
     diagnostics.activate(context);
@@ -226,7 +294,13 @@ function activate(context) {
     // The inbox is the addressed path used by new CLI callers. Start it only
     // after route modules are ready; its initial scan handles requests written
     // while the extension host was activating.
-    context.subscriptions.push(inbox.start(windowId, handleInboxRequest));
+    context.subscriptions.push(
+        inbox.start(windowId, handleInboxRequest, {
+            startedAt: hostStartedAt,
+            executionBudget,
+            inspectOwnership: (expected) => sessionBinding.inspect(expected),
+        }),
+    );
 
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration((e) => {

@@ -1,9 +1,86 @@
+const path = require("node:path");
+
 function samePath(left, right) {
-    const normalise = (value) =>
-        String(value || "")
-            .replace(/[\\/]+$/, "")
-            .toLowerCase();
-    return normalise(left) === normalise(right);
+    return normalisePath(left) === normalisePath(right);
+}
+
+function pathRules(value) {
+    return /^[A-Za-z]:[\\/]|^\\\\/.test(String(value || "")) ? path.win32 : path.posix;
+}
+
+function normalisePath(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    const rules = pathRules(value);
+    const absolute = rules.resolve(value);
+    const normal = absolute === rules.parse(absolute).root
+        ? absolute
+        : absolute.replace(/[\\/]+$/, "");
+    return rules === path.win32 ? normal.toLowerCase() : normal;
+}
+
+function directSessionFolder(value) {
+    const normal = normalisePath(value);
+    if (!normal) return null;
+    const rules = pathRules(normal);
+    if (rules.basename(rules.dirname(normal)).toLowerCase() !== "session-state") {
+        return null;
+    }
+    const sessionId = rules.basename(normal);
+    if (!/^[a-f0-9-]{36}$/i.test(sessionId)) return null;
+    return { sessionId, sessionFolder: normal };
+}
+
+function workspaceBinding(vscode) {
+    const folders = vscode?.workspace?.workspaceFolders || [];
+    if (!Array.isArray(folders)) return { state: "conflicted", sessionFolders: [] };
+
+    const found = [];
+    for (const entry of folders) {
+        const value = entry?.uri?.fsPath;
+        if (typeof value !== "string" || !value) {
+            return { state: "conflicted", sessionFolders: [] };
+        }
+        const session = directSessionFolder(value);
+        if (
+            session &&
+            !found.some((existing) => existing.sessionFolder === session.sessionFolder)
+        ) {
+            found.push(session);
+        }
+    }
+
+    if (found.length === 0) return { state: "unbound", sessionFolders: [] };
+    if (found.length > 1) return { state: "conflicted", sessionFolders: found };
+    return { state: "bound", ...found[0], sessionFolders: found };
+}
+
+function inspectWorkspaceOwnership(vscode, expected = {}) {
+    if (
+        typeof expected.sessionId !== "string" ||
+        !expected.sessionId ||
+        typeof expected.sessionFolder !== "string" ||
+        !expected.sessionFolder
+    ) {
+        return { state: "unknown" };
+    }
+    const expectedFolder = normalisePath(expected.sessionFolder);
+    if (
+        !expectedFolder ||
+        pathRules(expectedFolder).basename(expectedFolder).toLowerCase() !==
+            expected.sessionId.toLowerCase()
+    ) {
+        return { state: "conflicted" };
+    }
+
+    const actual = workspaceBinding(vscode);
+    if (actual.state !== "bound") return actual;
+    if (
+        actual.sessionId.toLowerCase() !== expected.sessionId.toLowerCase() ||
+        actual.sessionFolder !== expectedFolder
+    ) {
+        return { ...actual, state: "foreign" };
+    }
+    return { ...actual, state: "owned" };
 }
 
 function createSessionBinding({ vscode, findWorkspaceSession, sessionLabel }) {
@@ -73,7 +150,16 @@ function createSessionBinding({ vscode, findWorkspaceSession, sessionLabel }) {
         return { ok: true, cleared: true, sessionId: session.id };
     }
 
-    return { clear };
+    return {
+        clear,
+        inspect: (expected) => inspectWorkspaceOwnership(vscode, expected),
+        current: () => workspaceBinding(vscode),
+    };
 }
 
-module.exports = { createSessionBinding, samePath };
+module.exports = {
+    createSessionBinding,
+    inspectWorkspaceOwnership,
+    workspaceBinding,
+    samePath,
+};

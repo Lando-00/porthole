@@ -294,24 +294,18 @@ check("/cops stays deterministic and session-safe", () => {
     return "auto policy, no model handoff";
 });
 
-check("companion selection refuses cross-session project fallback", () => {
-    const source = readFileSync(join(ROOT, "extensions/porthole/lib/companion.mjs"), "utf8");
-    const sessionGuard = source.indexOf("if (sessionId || options.sessionPath)");
-    const contextFallback = source.indexOf("if (options.contextPath)");
-    if (sessionGuard === -1 || contextFallback === -1 || sessionGuard > contextFallback) {
-        throw new Error("session-missing must be decided before project-path fallback");
-    }
-    if (!source.includes('reason: "session-missing"')) {
-        throw new Error("missing exact-session windows must be reported explicitly");
-    }
-    if (!source.includes("samePath(sessionPath, String(folder))")) {
-        throw new Error("session workspace matching must use exact paths, not ancestor matching");
+check("session selectors share the ownership policy", () => {
+    for (const name of ["companion.mjs", "opensession.mjs", "ensure.mjs"]) {
+        const source = readFileSync(join(ROOT, "extensions/porthole/lib", name), "utf8");
+        if (!source.includes('from "./ownership.mjs"') || !source.includes("classifyOwnership")) {
+            throw new Error(`${name} must use the shared session ownership classifier`);
+        }
     }
     const presence = readFileSync(join(ROOT, "vscode-extension/src/presence.js"), "utf8");
     if (!presence.includes('require("./session").findWorkspaceSession')) {
         throw new Error("presence must not bind a window from an unrelated live-session lock");
     }
-    return "session before project";
+    return "shared policy; refusal and adoption behavior covered by routing tests";
 });
 
 check("a session may own several windows, and the oldest answers", () => {
@@ -328,19 +322,7 @@ check("a session may own several windows, and the oldest answers", () => {
     }
 
     const source = readFileSync(join(ROOT, "extensions/porthole/lib/companion.mjs"), "utf8");
-    const start = source.indexOf("export function chooseCompanion");
-    const end = source.indexOf("export function selectCompanion");
-    if (start === -1 || end === -1) throw new Error("could not find chooseCompanion");
-    const selector = source.slice(start, end);
-
-    const matches = selector.indexOf("sessionMatches.length > 0");
-    if (matches === -1) {
-        throw new Error("same-session matches must resolve to the primary, not be refused");
-    }
-    if (/sessionMatches[\s\S]{0,200}reason: "ambiguous"/.test(selector)) {
-        throw new Error("several windows owned by one session must not be reported as ambiguous");
-    }
-    if (!selector.includes("owned: sessionMatches")) {
+    if (!/\bowned\s*:/.test(source)) {
         throw new Error("the selector must expose the owned set so visual routes can broadcast");
     }
 
@@ -361,6 +343,9 @@ check("routes with side effects are never broadcast", () => {
     // Two Apply prompts for one preview, or two workspace edits for one
     // workspace-add, is either destructive or nonsense.
     for (const route of [
+        "tour",
+        "tour-activate",
+        "tour-exit",
         "preview",
         "workspace-add",
         "tour-delete",
@@ -375,7 +360,7 @@ check("routes with side effects are never broadcast", () => {
             throw new Error(`'${route}' must go to the primary window only, never broadcast`);
         }
     }
-    return "visual routes only";
+    return "non-Tour visual broadcasts only";
 });
 
 check("the example config is accepted by the loader", () => {
@@ -517,12 +502,9 @@ check("presence is republished after a request is handled", () => {
     // previous boot is outranked by the window doing the work, rather than
     // being picked ahead of it.
     const companion = readFileSync(join(ROOT, "vscode-extension/extension.js"), "utf8");
-    const dispatcher = readFileSync(
-        join(ROOT, "vscode-extension/src/dispatcher.js"),
-        "utf8",
-    );
-    if (!/writeAck\(requestId,\s*result\)/.test(dispatcher)) {
-        throw new Error("the shared dispatcher no longer acknowledges handled requests");
+    const inbox = readFileSync(join(ROOT, "vscode-extension/src/inbox.js"), "utf8");
+    if (!inbox.includes("writeAck(") || !companion.includes("transport.writeAck(")) {
+        throw new Error("addressed and legacy URI adapters must both acknowledge handled requests");
     }
     const adapter = companion.slice(companion.indexOf("const executeRequest = createDispatcher"));
     if (!/onHandled:[\s\S]{0,500}presence\.write\(/.test(adapter.slice(0, 1200))) {
@@ -661,21 +643,19 @@ check("a tour id means the same thing everywhere", () => {
     return "[\\w-]{1,64} everywhere";
 });
 
-check("a saved anchor is never recomputed", () => {
-    // The worst bug in the tour library, and invisible: a step whose code had
-    // changed falls back to its stored range, so re-hashing on save would store
-    // whatever unrelated code now sits there as what the narration was written
-    // about - and the next load would call the tour current.
+check("Tour publication and progress use separate documented records", () => {
+    // The actual anchor/round-trip behavior is exercised with real modules.
+    // Checking for `s.anchor || anchorFor(...)` used to bless the very fallback
+    // that laundered new Tour evidence on later autosaves.
     const store = readFileSync(join(ROOT, "vscode-extension/src/tourstore.js"), "utf8");
-    if (!/anchor:\s*s\.anchor\s*\|\|\s*anchors\.anchorFor/.test(store)) {
-        throw new Error("tourstore.js save() no longer reuses an existing anchor");
+    if (!store.includes("tour-progress")) {
+        throw new Error("Tour progress must have a separate storage path");
     }
-
-    const tour = readFileSync(join(ROOT, "vscode-extension/src/tour.js"), "utf8");
-    if (!tour.includes("raw.anchor")) {
-        throw new Error("tour.js normalise() drops the anchor, so save() cannot reuse it");
+    const protocol = readFileSync(join(ROOT, "docs/PROTOCOL.md"), "utf8");
+    if (!protocol.includes("tour-progress") || !protocol.includes("publicationId")) {
+        throw new Error("the progress/publication contract must be documented");
     }
-    return "reused, not re-derived";
+    return "publication separate from progress; integrity covered by runtime tests";
 });
 
 check("a missing file does not delete the step", () => {

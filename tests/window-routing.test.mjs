@@ -139,12 +139,61 @@ test("a parent session-state folder is not an exact session match", () => {
     assert.equal(selected.reason, "session-missing");
 });
 
-test("one legacy companion remains a compatibility fallback", () => {
+test("a legacy companion without session evidence is not a project fallback", () => {
     const selected = chooseCompanion(
         [{ pid: 42, appName: "VS Code", workspaceFolders: ["C:\\repo"] }],
         { contextPath: "C:\\repo", sessionPath: PATH_B },
     );
-    assert.equal(selected.companion.pid, 42);
+    assert.equal(selected.companion, null);
+    assert.equal(selected.reason, "session-missing");
+});
+
+test("an explicit window id cannot bypass session ownership", () => {
+    const selected = chooseCompanion(
+        [companion("1111111111111111", SESSION_A, PATH_A)],
+        { windowId: "1111111111111111", sessionId: SESSION_B, sessionPath: PATH_B },
+    );
+    assert.equal(selected.companion, null);
+});
+
+test("declared foreign binding outranks a matching workspace folder for reuse", () => {
+    const foreign = companion("1111111111111111", SESSION_A, PATH_A);
+    foreign.workspaceFolders = ["C:\\repo", PATH_B];
+    const selected = chooseWindowAction({
+        mode: "reuse",
+        windowId: foreign.windowId,
+        sessionId: SESSION_B,
+        sessionFolder: PATH_B,
+        companions: [foreign],
+    });
+    assert.equal(selected.ok, false);
+    assert.equal(selected.action, "refuse");
+});
+
+test("deliberate reuse of a genuinely unbound window remains available", () => {
+    const selected = chooseWindowAction({
+        mode: "reuse",
+        windowId: "1111111111111111",
+        sessionId: SESSION_B,
+        sessionFolder: PATH_B,
+        companions: [companion("1111111111111111", null, null)],
+    });
+    assert.equal(selected.ok, true);
+    assert.equal(selected.action, "reuse-window");
+});
+
+test("an explicit reuse target is never silently ignored by another open mode", () => {
+    for (const mode of ["auto", "new"]) {
+        const selected = chooseWindowAction({
+            mode,
+            windowId: "1111111111111111",
+            sessionId: SESSION_A,
+            sessionFolder: PATH_A,
+            companions: [companion("1111111111111111", SESSION_A, PATH_A)],
+        });
+        assert.equal(selected.ok, false);
+        assert.match(selected.error, /windowId requires mode 'reuse'/);
+    }
 });
 
 test("multiple legacy companions are refused", () => {
@@ -233,4 +282,12 @@ test("the selector returns the primary and the full owned set", () => {
         ["1111111111111111", "2222222222222222"],
         "the other session's window is never part of the owned set",
     );
+});
+
+test("a vanished explicit target stays unknown-window even when every window closed", () => {
+    const windowId = "1234567890abcdef";
+    const result = chooseCompanion([], { sessionId: SESSION_A, sessionPath: PATH_A, windowId });
+    assert.equal(result.companion, null);
+    assert.equal(result.reason, "unknown-window");
+    assert.equal(result.windowId, windowId);
 });

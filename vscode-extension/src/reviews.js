@@ -63,7 +63,9 @@ function save(payload = {}) {
     const slug = payload.replace === true ? preferred : availableSlug(session.id, preferred);
     const replaced = slug === preferred && payload.replace === true;
 
-    const repo = projectFolder();
+    const inherited = inheritedSource();
+    const repo = inherited ? inherited.repo : projectFolder();
+    const head = inherited || (repo ? gitHead(repo) : { branch: null, commit: null });
     const review = {
         schema: SCHEMA,
         slug,
@@ -72,8 +74,8 @@ function save(payload = {}) {
         updatedAt: new Date().toISOString(),
         sessionId: session.id,
         repo,
-        branch: repo ? gitHead(repo).branch : null,
-        commit: repo ? gitHead(repo).commit : null,
+        branch: head.branch || null,
+        commit: head.commit || null,
         findings: findings.map((f) => toFinding(f, repo)),
     };
 
@@ -116,15 +118,39 @@ function collectFindings() {
             stepTitle: s.stepTitle,
             message: s.stepTitle,
             narration: s.narration,
+            anchor: s.anchor || null,
+            inheritedEvidence: true,
         }));
     }
-    return annotations.getState().entries.map((e) => ({
-        file: e.file,
-        startLine: e.startLine,
-        endLine: e.endLine,
-        severity: e.severity,
-        message: e.message,
-    }));
+    return annotations.getState().entries.map((entry) => {
+        const authored = entry.authored || {};
+        return {
+            file: entry.file,
+            startLine: entry.startLine,
+            endLine: entry.endLine,
+            severity: entry.inheritedEvidence ? authored.severity : entry.severity,
+            message: entry.inheritedEvidence ? authored.message : entry.message,
+            stepTitle: entry.inheritedEvidence ? authored.stepTitle : undefined,
+            narration: entry.inheritedEvidence ? authored.narration : undefined,
+            anchor: entry.inheritedEvidence ? authored.anchor : null,
+            inheritedEvidence: entry.inheritedEvidence === true,
+        };
+    });
+}
+
+function inheritedSource() {
+    const activeTour = tour.getState();
+    if (activeTour.steps.length > 0 && activeTour.tourId) {
+        const entry = tour.getTour(activeTour.tourId);
+        if (entry) {
+            return {
+                repo: entry.publication?.repo || entry.repo || null,
+                branch: entry.branch || null,
+                commit: entry.publication?.commit || entry.commit || null,
+            };
+        }
+    }
+    return annotations.getState().source || null;
 }
 
 function defaultTitle() {
@@ -142,8 +168,12 @@ function toFinding(f, repo) {
     if (f.stepTitle) out.stepTitle = f.stepTitle;
     if (f.narration) out.narration = f.narration;
 
-    const anchor = anchors.anchorFor(f.file, f.startLine, f.endLine);
-    if (anchor) out.anchor = anchor;
+    if (f.anchor?.sha256) {
+        out.anchor = f.anchor;
+    } else if (!f.inheritedEvidence) {
+        const anchor = anchors.anchorFor(f.file, f.startLine, f.endLine);
+        if (anchor) out.anchor = anchor;
+    }
     return out;
 }
 
@@ -419,6 +449,13 @@ async function load(payload = {}) {
             endLine: state.endLine,
             severity: state.status === "changed" ? "warn" : finding.severity,
             message: describe(finding, state.status),
+            authored: {
+                severity: finding.severity || "info",
+                message: finding.message || "",
+                stepTitle: finding.stepTitle,
+                narration: finding.narration,
+                anchor: finding.anchor || null,
+            },
         });
     }
 
@@ -430,9 +467,14 @@ async function load(payload = {}) {
         };
     }
 
-    await annotations.annotate({
+    await annotations.restore({
         title: `${review.title} (${review.createdAt.slice(0, 10)})`,
         clearExisting: true,
+        source: {
+            repo: review.repo || null,
+            branch: review.branch || null,
+            commit: review.commit || null,
+        },
         annotations: entries,
     });
 

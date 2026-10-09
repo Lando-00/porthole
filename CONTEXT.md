@@ -37,15 +37,14 @@ window never owns a second Copilot session.
 _Avoid_: VS Code session, shared window
 
 **Primary window**:
-The oldest window a Copilot session owns, decided by `startedAt`. It answers for
-the session: every operation with side effects or a single answer goes there,
-and its acknowledgment is the session's answer. When it closes, the next oldest
-becomes primary.
+The oldest window a Copilot session owns. It is the default target for the
+session's interactions and the authoritative participant in a visual broadcast.
 _Avoid_: Main window, active window
 
 **Secondary window**:
 Any further window the same Copilot session owns, usually one it was explicitly
-asked to open. Visual routes reach it too; single-answer routes do not.
+asked to open. It can receive visual broadcasts or an explicitly targeted Tour;
+it does not automatically follow the primary's Walkthrough.
 _Avoid_: Duplicate window, extra window
 
 **Tour**:
@@ -64,9 +63,24 @@ _Avoid_: File mention, symbol occurrence
 
 **Candidate step**:
 A changed code range offered to the model as a possible Tour step. It has a
-location but no narration, and it is not part of any Tour until the model
-selects it.
+location in a stated comparison but no narration; the model selects its current
+code location before making it part of a Tour.
 _Avoid_: Hunk, diff step
+
+**Tour publication**:
+The authored explanation and original source evidence of a Tour, established
+when it is created or explicitly replaced.
+_Avoid_: Autosave, cursor update
+
+**Tour progress**:
+The reader's position within one Tour publication, separate from its authored
+explanation and evidence.
+_Avoid_: Tour revision, publication
+
+**Revision advisory**:
+A notice that the repository revision differs from the one recorded for a Tour
+publication; it does not assert that the explanation is incorrect.
+_Avoid_: Verified explanation, automatic review
 
 **Tour library**:
 The collection of tours owned by one Copilot session. A resumed session
@@ -75,8 +89,8 @@ an empty library.
 _Avoid_: Global tour library, shared library
 
 **Active tour**:
-The one tour currently driving the Porthole window's walkthrough visuals. A
-Tour Library may contain many tours but has at most one Active Tour.
+The one tour currently driving a particular Porthole window's walkthrough
+visuals. Other windows of the same session may walk a different Tour.
 _Avoid_: Current walkthrough
 
 **Saved tour discovery**:

@@ -1,5 +1,6 @@
 const PROTOCOL_LEVEL = 1;
 const ADDRESSED_INBOX = "transport:addressed-inbox";
+const SESSION_OWNED_OPERATIONS = "transport:session-owned-operations-v1";
 const REQUIRED_CLI_CAPABILITIES = [ADDRESSED_INBOX];
 
 const ROUTES = [
@@ -40,6 +41,7 @@ function presenceContract(routes = ROUTES) {
         protocolLevel: PROTOCOL_LEVEL,
         capabilities: [
             ADDRESSED_INBOX,
+            SESSION_OWNED_OPERATIONS,
             ...new Set(routes.map(routeCapability)),
         ],
         requiredCliCapabilities: [...REQUIRED_CLI_CAPABILITIES],
@@ -94,12 +96,18 @@ function connectionHealth({
         };
     }
 
-    return { state: "connected", legacy: false };
+    return {
+        state: "connected",
+        legacy:
+            !endpoint.capabilities.includes(SESSION_OWNED_OPERATIONS) ||
+            !companionCapabilities.includes(SESSION_OWNED_OPERATIONS),
+    };
 }
 
 module.exports = {
     PROTOCOL_LEVEL,
     ADDRESSED_INBOX,
+    SESSION_OWNED_OPERATIONS,
     REQUIRED_CLI_CAPABILITIES,
     ROUTES,
     routeCapability,

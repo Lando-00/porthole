@@ -3,14 +3,15 @@
 // The CLI writes <windowId>/<requestId>.json.tmp and atomically renames it
 // into ~/.copilot/porthole/inbox/<windowId>/. The companion watches only its
 // own directory, claims each request with another atomic rename, and hands the
-// request to extension.js. URI and inbox delivery therefore share one
-// dispatcher and one ack path.
+// request to extension.js. URI and inbox delivery share route dispatch, while
+// this addressed path owns guarded admission and per-attempt acknowledgements.
 
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
 const transport = require("./transport");
+const { createOperationHost, createExecutionBudget } = require("./operations");
 const { diag } = require("./log");
 
 const WINDOW_ID_RE = /^[a-f0-9]{16}$/;
@@ -122,9 +123,8 @@ function discardInvalidEntry(dir, entry) {
     }
 }
 
-function invalid(requestId, error) {
-    transport.writeAck(requestId, { ok: false, error });
-    return null;
+function invalid(error, details = {}) {
+    return { request: null, error, ...details };
 }
 
 function readRequest(file, fileRequestId) {
@@ -132,42 +132,56 @@ function readRequest(file, fileRequestId) {
     try {
         stat = fs.lstatSync(file);
     } catch {
-        return invalid(fileRequestId, "request file was missing");
+        return invalid("request file was missing");
     }
     if (!stat.isFile() || stat.isSymbolicLink()) {
-        return invalid(fileRequestId, "request file was not a regular file");
+        return invalid("request file was not a regular file");
     }
     if (stat.size > MAX_REQUEST_BYTES) {
-        return invalid(fileRequestId, "request was too large");
+        return invalid("request was too large");
     }
 
     let parsed;
     try {
         parsed = JSON.parse(fs.readFileSync(file, "utf8"));
     } catch {
-        return invalid(fileRequestId, "request was not valid JSON");
+        return invalid("request was not valid JSON");
     }
 
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return invalid(fileRequestId, "request was not a JSON object");
+        return invalid("request was not a JSON object");
     }
+    const guarded = Object.prototype.hasOwnProperty.call(parsed, "operation");
+    const operationId =
+        guarded && parsed.operation && typeof parsed.operation.id === "string"
+            ? parsed.operation.id
+            : null;
     if (!isValidRequestId(parsed.requestId)) {
-        return invalid(fileRequestId, "requestId was missing or invalid");
+        return invalid("requestId was missing or invalid", { guarded, operationId });
     }
     if (parsed.requestId !== fileRequestId) {
-        return invalid(fileRequestId, "requestId did not match its filename");
+        return invalid("requestId did not match its filename", { guarded, operationId });
     }
     if (typeof parsed.route !== "string" || !ROUTE_RE.test(parsed.route)) {
-        return invalid(fileRequestId, "route was missing or invalid");
+        return invalid("route was missing or invalid", { guarded, operationId });
     }
     if (!Object.prototype.hasOwnProperty.call(parsed, "payload")) {
-        return invalid(fileRequestId, "payload was missing");
+        return invalid("payload was missing", { guarded, operationId });
     }
 
     return {
-        requestId: parsed.requestId,
-        route: parsed.route,
-        payload: parsed.payload,
+        request: {
+            requestId: parsed.requestId,
+            route: parsed.route,
+            payload: parsed.payload,
+            ...(typeof parsed.legacyReason === "string"
+                ? { legacyReason: parsed.legacyReason }
+                : {}),
+            ...(guarded ? { operation: parsed.operation } : {}),
+        },
+        error: null,
+        guarded,
+        operationId,
     };
 }
 
@@ -209,12 +223,54 @@ function consume(state, entry) {
         return;
     }
 
-    state.inFlight += 1;
-    void handle(state, claimed, requestId).finally(() => {
-        state.inFlight -= 1;
-        // Anything the concurrency cap made us leave behind is still sitting in
-        // the inbox, so look again now that there is room.
-        schedule(state);
+    const parsed = readRequest(claimed, requestId);
+    if (parsed.error) {
+        state.writeAck(requestId, {
+            ok: false,
+            reason: parsed.guarded ? "invalid-operation" : "invalid-request",
+            error: parsed.error,
+            requestId,
+            operationId: parsed.operationId || null,
+            windowId: state.id,
+            targetStartedAt: state.startedAt,
+            deliveryMode: parsed.guarded ? "guarded" : "legacy-single-shot",
+            disposition: "rejected",
+        });
+        finishClaim(state, claimed);
+        return;
+    }
+
+    if (parsed.guarded) {
+        void handleGuarded(state, parsed.request).finally(() => {
+            finishClaim(state, claimed);
+        });
+        return;
+    }
+
+    const releaseExecution = state.executionBudget.acquire();
+    if (!releaseExecution) {
+        try {
+            fs.renameSync(claimed, childPath(state.dir, entry));
+        } catch {
+            state.writeAck(requestId, {
+                ok: false,
+                reason: "busy",
+                error: "the companion execution budget is full",
+                requestId,
+                operationId: null,
+                windowId: state.id,
+                targetStartedAt: state.startedAt,
+                deliveryMode: "legacy-single-shot",
+                disposition: "rejected",
+            });
+            finishClaim(state, claimed);
+        }
+        return;
+    }
+
+    void handleLegacy(state, parsed.request).finally(() => {
+        releaseExecution();
+        finishClaim(state, claimed);
     });
 }
 
@@ -261,25 +317,110 @@ function sweepAbandoned(state, entry) {
     }
 }
 
-async function handle(state, claimed, requestId) {
+function finishClaim(state, claimed) {
     try {
-        const request = readRequest(claimed, requestId);
-        if (request) {
-            try {
-                await state.onRequest(request);
-            } catch (err) {
-                transport.writeAck(requestId, {
-                    ok: false,
-                    error: err && err.message ? err.message : String(err),
-                });
-            }
+        fs.rmSync(claimed, { force: true });
+    } catch {
+        // Deactivation may have removed the inbox already.
+    }
+    schedule(state);
+}
+
+function normaliseLegacyResult(value) {
+    return value && typeof value === "object" && !Array.isArray(value)
+        ? value
+        : {
+              ok: false,
+              error: "route returned no result",
+              mayHaveExecuted: true,
+          };
+}
+
+async function handleLegacy(state, request) {
+    let result;
+    try {
+        result = normaliseLegacyResult(
+            await state.onRequest(request, {
+                deliveryMode: "legacy-single-shot",
+                legacyReason: request.legacyReason || null,
+            }),
+        );
+    } catch (error) {
+        result = {
+            ok: false,
+            error: error?.message || String(error),
+            mayHaveExecuted: true,
+        };
+    }
+    state.writeAck(request.requestId, {
+        ...result,
+        requestId: request.requestId,
+        operationId: null,
+        windowId: state.id,
+        targetStartedAt: state.startedAt,
+        deliveryMode: "legacy-single-shot",
+        disposition: "executed",
+    });
+}
+
+async function handleGuarded(state, request) {
+    if (!state.operationHost) {
+        state.writeAck(request.requestId, {
+            ok: false,
+            reason: "invalid-operation",
+            error: "guarded operation admission is unavailable",
+            requestId: request.requestId,
+            operationId:
+                request.operation && typeof request.operation.id === "string"
+                    ? request.operation.id
+                    : null,
+            windowId: state.id,
+            targetStartedAt: state.startedAt,
+            deliveryMode: "guarded",
+            disposition: "rejected",
+        });
+        return;
+    }
+
+    let result;
+    try {
+        result = await state.operationHost.submit(request);
+    } catch (error) {
+        result = {
+            ok: false,
+            reason: "operation-error",
+            error: error?.message || String(error),
+            mayHaveExecuted: true,
+            requestId: request.requestId,
+            operationId:
+                request.operation && typeof request.operation.id === "string"
+                    ? request.operation.id
+                    : null,
+            windowId: state.id,
+            targetStartedAt: state.startedAt,
+            deliveryMode: "guarded",
+            disposition: "rejected",
+        };
+    }
+    state.writeAck(request.requestId, result);
+}
+
+function entryMightBeGuarded(state, entry) {
+    try {
+        const file = childPath(state.dir, entry);
+        const stat = fs.lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_REQUEST_BYTES) {
+            return true;
         }
-    } finally {
-        try {
-            fs.rmSync(claimed, { force: true });
-        } catch {
-            // Deactivation may have removed the inbox already.
-        }
+        const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+        return (
+            !parsed ||
+            typeof parsed !== "object" ||
+            Array.isArray(parsed) ||
+            Object.prototype.hasOwnProperty.call(parsed, "operation")
+        );
+    } catch {
+        return true;
     }
 }
 
@@ -291,6 +432,12 @@ function scan(state) {
         return;
     }
 
+    try {
+        state.operationHost?.maintain();
+    } catch (error) {
+        diag(`porthole operation maintenance failed: ${error.message}`);
+    }
+
     for (const entry of entries) {
         if (state.stopped) return;
         if (entry.endsWith(ABANDONED)) {
@@ -298,9 +445,12 @@ function scan(state) {
             continue;
         }
         if (!entry.endsWith(".json")) continue;
-        // Leave the rest for the next pass rather than opening an unbounded
-        // number of routes at once.
-        if (state.inFlight >= MAX_IN_FLIGHT) return;
+        if (
+            state.executionBudget.active >= state.executionBudget.limit &&
+            !entryMightBeGuarded(state, entry)
+        ) {
+            continue;
+        }
         consume(state, entry);
     }
 }
@@ -329,7 +479,7 @@ function schedule(state) {
     })();
 }
 
-function start(windowId, onRequest) {
+function start(windowId, onRequest, options = {}) {
     if (typeof onRequest !== "function") throw new TypeError("inbox handler is required");
 
     let paths;
@@ -340,12 +490,33 @@ function start(windowId, onRequest) {
         return { dispose() {} };
     }
 
+    let operationHost = options.operationHost || null;
+    const executionBudget = operationHost?.executionBudget || options.executionBudget ||
+        createExecutionBudget(options.operationOptions?.maxExecutions || MAX_IN_FLIGHT);
+    if (!operationHost && options.startedAt && typeof options.inspectOwnership === "function") {
+        try {
+            operationHost = createOperationHost({
+                windowId: paths.id,
+                startedAt: options.startedAt,
+                inspectOwnership: options.inspectOwnership,
+                execute: (request) => onRequest(request, { deliveryMode: "guarded" }),
+                ...(options.operationOptions || {}),
+                executionBudget,
+            });
+        } catch (error) {
+            diag(`porthole guarded operation host unavailable: ${error.message}`);
+        }
+    }
+
     const state = {
         ...paths,
         onRequest,
+        writeAck: options.writeAck || transport.writeAck,
+        startedAt: options.startedAt || null,
+        operationHost,
+        executionBudget,
         watcher: null,
         poller: null,
-        inFlight: 0,
         scanRequested: false,
         scanning: false,
         stopped: false,

@@ -7,15 +7,17 @@
 //
 //   <sessionDir>/porthole/tours/<tourId>.json
 //
-// Saving is automatic. The alternative - a save step the model has to remember
-// - is a step the model will sometimes not take, and losing an explanation you
-// have already walked is exactly the failure this feature exists to prevent.
+// Authored content is written once when a Tour is published. Navigation writes
+// only the reader's cursor into a separate progress record:
+//
+//   <sessionDir>/porthole/tour-progress/<tourId>.json
 //
 // Loading re-anchors every step, so a tour written three commits ago says so
 // rather than pointing confidently at whatever now occupies line 40.
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const vscode = require("vscode");
 
@@ -24,7 +26,13 @@ const anchors = require("./anchors");
 const tour = require("./tour");
 const atomic = require("./atomic");
 const { findWorkspaceSession, sessionRoot } = require("./session");
-const { projectFolder, gitHead, storedPath, absoluteFile } = require("./repo");
+const {
+    gitRevisions,
+    revisionState,
+    normaliseRepo,
+    storedPath,
+    absoluteFile,
+} = require("./repo");
 
 const SCHEMA = 1;
 const SLUG_PATTERN = /^[\w-]{1,64}$/;
@@ -59,15 +67,142 @@ function fileFor(sessionDir, tourId) {
     return path.join(toursDir(sessionDir), `${tourId}.json`);
 }
 
-// --- saving -----------------------------------------------------------------
+function progressDir(sessionDir) {
+    return path.join(sessionDir, "porthole", "tour-progress");
+}
 
-/**
- * Queues a save.
- *
- * Called from tour.js on every state change, including cursor moves, so it has
- * to be cheap. The actual write happens on the timer.
- */
-function schedule(tourId) {
+function progressFileFor(sessionDir, tourId) {
+    return path.join(progressDir(sessionDir), `${tourId}.json`);
+}
+
+// --- publication and progress ----------------------------------------------
+
+function authoredIdentity(record) {
+    return {
+        tourId: record.tourId,
+        title: record.title,
+        createdAt: record.createdAt,
+        sessionId: record.sessionId,
+        endpointId: record.endpointId || null,
+        repo: record.repo || null,
+        branch: record.branch || null,
+        commit: record.commit || null,
+        provenance: record.provenance || null,
+        steps: (record.steps || []).map((step) => ({
+            file: step.file,
+            startLine: step.startLine,
+            endLine: step.endLine,
+            stepTitle: step.stepTitle,
+            narration: step.narration,
+            severity: step.severity,
+            anchor: step.anchor || null,
+        })),
+    };
+}
+
+function publicationIdFor(record) {
+    if (record.publication?.id) return String(record.publication.id);
+    return `legacy-${crypto
+        .createHash("sha256")
+        .update(JSON.stringify(authoredIdentity(record)), "utf8")
+        .digest("hex")}`;
+}
+
+function publish(entry, options = {}) {
+    const tourId = String(entry?.tourId || "").trim();
+    if (!SLUG_PATTERN.test(tourId)) return { ok: false, error: "a tourId is required" };
+
+    const session = findWorkspaceSession();
+    if (!session) {
+        return { ok: false, error: "no Copilot session folder is bound to this window" };
+    }
+    if (entry.sourceSessionId && entry.sourceSessionId !== session.id) {
+        return { ok: false, error: `tour '${tourId}' is owned by another Copilot session` };
+    }
+    if (
+        !entry.publication?.id ||
+        !entry.publication?.at ||
+        !Object.prototype.hasOwnProperty.call(entry.publication, "repo") ||
+        !Object.prototype.hasOwnProperty.call(entry.publication, "commit")
+    ) {
+        return { ok: false, error: "the Tour publication metadata is incomplete" };
+    }
+    if (!Array.isArray(entry.steps) || entry.steps.some((step) => !step.anchor?.sha256)) {
+        return { ok: false, error: "every published Tour step needs captured source evidence" };
+    }
+
+    if (options.expectedSession && (
+        options.expectedSession.id !== session.id ||
+        path.relative(options.expectedSession.dir, session.dir) !== ""
+    )) {
+        return { ok: false, error: "the session binding changed while publishing the Tour" };
+    }
+    const file = fileFor(session.dir, tourId);
+    const existing = read(file);
+    if (existing && existing.sessionId !== session.id) {
+        return { ok: false, error: `tour '${tourId}' is owned by another Copilot session` };
+    }
+    if (existing && options.replace === false) {
+        return {
+            ok: false,
+            error:
+                `a tour called '${tourId}' is already saved; pass replace to overwrite it, ` +
+                "or use a different tourId",
+        };
+    }
+
+    const repo = entry.publication.repo || null;
+    const record = {
+        schema: SCHEMA,
+        tourId,
+        title: entry.title,
+        createdAt: existing?.createdAt || entry.createdAt || entry.publication.at,
+        updatedAt: entry.publication.at,
+        sessionId: session.id,
+        endpointId: entry.endpointId || null,
+        repo,
+        branch: entry.branch || null,
+        commit: entry.publication.commit || null,
+        current: -1,
+        publication: {
+            id: String(entry.publication.id),
+            at: String(entry.publication.at),
+            repo,
+            commit: entry.publication.commit || null,
+        },
+        steps: entry.steps.map((step) => ({
+            file: storedPath(step.file, repo),
+            startLine: step.startLine,
+            endLine: step.endLine,
+            stepTitle: step.stepTitle,
+            narration: step.narration,
+            severity: step.severity,
+            anchor: step.anchor,
+        })),
+    };
+
+    try {
+        atomic.writeJson(file, record);
+    } catch (err) {
+        diag(`tour publication failed: ${tourId}: ${err.message}`);
+        return { ok: false, error: `could not write the Tour publication: ${err.message}` };
+    }
+
+    diag(`tour published: ${file} (${record.steps.length} steps)`);
+    return {
+        ok: true,
+        result: {
+            tourId,
+            file,
+            steps: record.steps.length,
+            sessionId: session.id,
+            createdAt: record.createdAt,
+            updatedAt: record.updatedAt,
+        },
+    };
+}
+
+function scheduleProgress(tourId) {
     if (!tourId) return;
     const existing = pending.get(tourId);
     if (existing) clearTimeout(existing);
@@ -75,27 +210,35 @@ function schedule(tourId) {
         tourId,
         setTimeout(() => {
             pending.delete(tourId);
-            save(tourId);
+            saveProgress(tourId);
         }, SAVE_DEBOUNCE_MS),
     );
 }
 
-/** Writes any queued saves immediately. Used on shutdown. */
+function flushProgress(tourId) {
+    const timer = pending.get(tourId);
+    if (!timer) return null;
+    clearTimeout(timer);
+    pending.delete(tourId);
+    return saveProgress(tourId);
+}
+
+/** Writes any queued cursor records immediately. Used on shutdown. */
 function flush() {
     for (const [tourId, timer] of pending) {
         clearTimeout(timer);
-        save(tourId);
+        saveProgress(tourId);
     }
     pending.clear();
 }
 
-function save(tourId) {
+function saveProgress(tourId) {
     const entry = tour.getTour(tourId);
     if (!entry) return { ok: false, error: `no tour called '${tourId}' is loaded` };
 
     const session = findWorkspaceSession();
     if (!session) {
-        diag(`tour not saved (no exact workspace session): ${tourId}`);
+        diag(`tour progress not saved (no exact workspace session): ${tourId}`);
         return { ok: false, error: "no Copilot session folder is bound to this window" };
     }
     if (entry.sourceSessionId && entry.sourceSessionId !== session.id) {
@@ -105,58 +248,27 @@ function save(tourId) {
         };
     }
 
-    const repo = entry.repo || projectFolder();
-    const head = repo ? gitHead(repo) : { branch: null, commit: null };
-
+    const publicationId = entry.publication?.id || entry.publicationId;
+    if (!publicationId) {
+        return { ok: false, error: `tour '${tourId}' has no publication identity` };
+    }
     const record = {
         schema: SCHEMA,
-        tourId,
-        title: entry.title,
-        createdAt: entry.createdAt,
-        updatedAt: new Date().toISOString(),
-        sessionId: entry.sourceSessionId || session.id,
-        endpointId: entry.endpointId || null,
-        repo,
-        branch: entry.branch ?? head.branch,
-        commit: entry.commit ?? head.commit,
+        publicationId,
         current: entry.current,
-        ...(entry.provenance ? { provenance: entry.provenance } : {}),
-        steps: entry.steps.map((s) => ({
-            file: storedPath(s.file, repo),
-            startLine: s.startLine,
-            endLine: s.endLine,
-            stepTitle: s.stepTitle,
-            narration: s.narration,
-            // As authored, never the severity a stale step is *shown* with.
-            // Writing the display value back would destroy the caller's choice
-            // after a single round trip.
-            severity: s.severity,
-            // Reused, not recomputed, when the step already has one.
-            //
-            // Recomputing looked harmless and was the worst bug in this
-            // feature: a step whose code had changed falls back to its stored
-            // range, so re-hashing would take whatever unrelated code now sits
-            // there and store it as what the narration was written about. The
-            // next load would call the tour current, the warnings would vanish,
-            // and one arrow-key press would have laundered a three-commit-old
-            // walkthrough into a trustworthy-looking one.
-            anchor: s.anchor || anchors.anchorFor(s.file, s.startLine, s.endLine) || undefined,
-        })),
+        updatedAt: new Date().toISOString(),
     };
 
-    const file = fileFor(session.dir, tourId);
+    const file = progressFileFor(session.dir, tourId);
     try {
-        // Write then rename, so a reader never sees a half-written tour, and
-        // under a temp name unique to this writer, so a second window bound to
-        // the same session cannot interleave its bytes with ours.
         atomic.writeJson(file, record);
     } catch (err) {
-        diag(`tour save failed: ${tourId}: ${err.message}`);
-        return { ok: false, error: `could not write the tour: ${err.message}` };
+        diag(`tour progress save failed: ${tourId}: ${err.message}`);
+        return { ok: false, error: `could not write Tour progress: ${err.message}` };
     }
 
-    diag(`tour saved: ${file} (${record.steps.length} steps)`);
-    return { ok: true, result: { tourId, file, steps: record.steps.length } };
+    diag(`tour progress saved: ${file} (step ${record.current})`);
+    return { ok: true, result: { tourId, file, publicationId, current: record.current } };
 }
 
 // --- reading ----------------------------------------------------------------
@@ -165,6 +277,27 @@ function read(file) {
     try {
         const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
         if (!parsed || parsed.schema !== SCHEMA || !SLUG_PATTERN.test(String(parsed.tourId || ""))) {
+            return null;
+        }
+        return parsed;
+    } catch {
+        return null;
+    }
+}
+
+function readProgress(sessionDir, tourId, publicationId) {
+    try {
+        const parsed = JSON.parse(
+            fs.readFileSync(progressFileFor(sessionDir, tourId), "utf8"),
+        );
+        if (
+            !parsed ||
+            parsed.schema !== SCHEMA ||
+            typeof parsed.publicationId !== "string" ||
+            parsed.publicationId !== publicationId ||
+            !Number.isInteger(parsed.current) ||
+            parsed.current < -1
+        ) {
             return null;
         }
         return parsed;
@@ -196,7 +329,8 @@ function scan({ repo, sessionId } = {}) {
         if (!entry.isDirectory()) continue;
         if (sessionId && entry.name !== sessionId) continue;
 
-        const dir = toursDir(path.join(root, entry.name));
+        const sessionDir = path.join(root, entry.name);
+        const dir = toursDir(sessionDir);
         let files = [];
         try {
             files = fs.readdirSync(dir).filter((f) => f.endsWith(".json"));
@@ -209,7 +343,15 @@ function scan({ repo, sessionId } = {}) {
             if (!record) continue;
             if (sessionId && record.sessionId !== sessionId) continue;
             if (wantRepo && String(record.repo || "").toLowerCase() !== wantRepo) continue;
-            found.push({ ...record, file });
+            const publicationId = publicationIdFor(record);
+            const progress = readProgress(sessionDir, record.tourId, publicationId);
+            found.push({
+                ...record,
+                authoredCurrent: record.current,
+                current: progress?.current ?? record.current,
+                publicationId,
+                file,
+            });
         }
     }
 
@@ -226,9 +368,9 @@ function scan({ repo, sessionId } = {}) {
  *
  * A step whose file is not here is **kept**, not dropped. Absence is usually
  * temporary - a different branch, an uninitialised submodule, a checkout that
- * has moved - and dropping it would be permanent, because the next autosave
- * writes the shortened tour back over the original. `upsert` already refuses to
- * lose a step quietly; the load path has to hold the same line.
+ * has moved - and dropping it from the live Tour would make later deliberate
+ * artifact operations lose authored content. `upsert` already refuses to lose
+ * a step quietly; the load path has to hold the same line.
  */
 function resolveSteps(record) {
     const tally = anchors.tally();
@@ -251,15 +393,24 @@ function resolveSteps(record) {
     return { steps, staleness: tally };
 }
 
-function liveTour(record, steps, staleness) {
+function liveTour(record, steps, staleness, currentRevisionState = "unknown") {
     return {
         ...record,
         file: undefined,
+        authoredCurrent: undefined,
         steps,
         staleness,
+        publicationId: record.publication?.id || record.publicationId || publicationIdFor(record),
+        revisionState: currentRevisionState,
         sourceFile: undefined,
         sourceSessionId: record.sessionId,
+        sourceSessionPath: path.join(sessionRoot(), record.sessionId),
     };
+}
+
+function revisionFor(record, revisions) {
+    const repo = normaliseRepo(record.publication?.repo);
+    return revisionState(record.publication, repo ? revisions.get(repo) : null);
 }
 
 // --- routes -----------------------------------------------------------------
@@ -268,11 +419,16 @@ function liveTour(record, steps, staleness) {
  * The bound session's library, as the CLI sees it: what is loaded, what is only
  * on disk, and how much of each still describes the current code.
  */
-function list(payload = {}) {
+async function list(payload = {}) {
     const limit = Math.min(200, Math.max(1, Number.parseInt(payload.limit, 10) || 50));
     const includeSteps = payload.includeSteps === true;
     const includeArchived = payload.includeArchived === true;
     const session = findWorkspaceSession();
+    const records = session
+        ? scan({ repo: payload.repo, sessionId: session.id }).filter(
+              (record) => includeArchived || !record.archivedAt,
+          )
+        : [];
     const loaded = tour.getLibrary();
     const byId = new Map();
     const ownedLoaded = session
@@ -282,8 +438,21 @@ function list(payload = {}) {
                   (includeArchived || !entry.archivedAt),
           )
         : [];
+    const loadedIds = new Set(ownedLoaded.map((entry) => entry.tourId));
+    const selected = [...ownedLoaded, ...records.filter((record) => !loadedIds.has(record.tourId))].slice(0, limit);
+    const selectedIds = new Set(selected.map((entry) => entry.tourId));
+    const revisions = await gitRevisions(
+        selected.map((record) => record.publication?.repo).filter(Boolean),
+    );
+    tour.updateRevisionStates(ownedLoaded.filter((entry) => selectedIds.has(entry.tourId)).map((entry) => ({
+        tourId: entry.tourId,
+        publicationId: entry.publication?.id || entry.publicationId,
+        revisionState: revisionFor(entry, revisions),
+    })));
 
     for (const entry of ownedLoaded) {
+        if (!selectedIds.has(entry.tourId)) continue;
+        const record = records.find((candidate) => candidate.tourId === entry.tourId);
         byId.set(entry.tourId, {
             tourId: entry.tourId,
             title: entry.title,
@@ -297,28 +466,18 @@ function list(payload = {}) {
             updatedAt: entry.updatedAt,
             archivedAt: entry.archivedAt,
             sessionId: entry.sourceSessionId,
-            sourceFile: entry.sourceFile,
-            // Present only for a tour that came off disk, and describing how it
-            // resolved when it was read. A tour built in this window is current
-            // by definition; a tally of zeros for it would read as "checked and
-            // fine" rather than "not applicable".
+            sourceFile: record?.file || entry.sourceFile,
             staleness: entry.staleness,
+            revisionState: revisionFor(entry, revisions),
+            publication: entry.publication,
+            savedPublicationChanged: Boolean(record && publicationIdFor(record) !== (entry.publication?.id || entry.publicationId)),
             stepDetail: includeSteps ? entry.steps.map(describeStep) : undefined,
         });
     }
 
-    for (const record of session
-        ? scan({ repo: payload.repo, sessionId: session.id })
-        : []) {
-        if (record.archivedAt && !includeArchived) continue;
-        if (byId.has(record.tourId)) {
-            // Loaded wins, but the on-disk copy is where staleness can be
-            // measured without disturbing what is on screen.
-            const summary = byId.get(record.tourId);
-            summary.file = record.file;
-            summary.sessionId = record.sessionId;
-            continue;
-        }
+    for (const record of records) {
+        if (!selectedIds.has(record.tourId)) continue;
+        if (byId.has(record.tourId)) continue;
         const { steps, staleness } = resolveSteps(record);
         byId.set(record.tourId, {
             tourId: record.tourId,
@@ -335,12 +494,14 @@ function list(payload = {}) {
             sessionId: record.sessionId,
             file: record.file,
             staleness,
+            revisionState: revisionFor(record, revisions),
+            publication: record.publication,
             stepDetail: includeSteps ? steps.map(describeStep) : undefined,
         });
     }
 
     const tours = [...byId.values()].slice(0, limit);
-    const activeTourId = byId.has(loaded.activeTourId) ? loaded.activeTourId : null;
+    const activeTourId = ownedLoaded.some((entry) => entry.tourId === loaded.activeTourId) ? loaded.activeTourId : null;
     return {
         ok: true,
         result: { tours, activeTourId, loaded: ownedLoaded.length },
@@ -484,6 +645,10 @@ async function cleanupLegacy(payload = {}) {
 
     try {
         fs.rmSync(record.file, { force: true });
+        fs.rmSync(
+            progressFileFor(path.join(sessionRoot(), sourceSessionId), sourceTourId),
+            { force: true },
+        );
     } catch (err) {
         return { ok: false, error: `could not delete the legacy Tour copy: ${err.message}` };
     }
@@ -503,23 +668,24 @@ async function cleanupLegacy(payload = {}) {
 
 function writeTourRecord(record) {
     const stored = { ...record };
+    stored.current = record.authoredCurrent ?? record.current;
     delete stored.file;
+    delete stored.authoredCurrent;
+    delete stored.publicationId;
+    delete stored.revisionState;
+    delete stored.sourceFile;
+    delete stored.sourceSessionId;
     atomic.writeJson(record.file, stored);
 }
 
-function setArchived(payload = {}) {
+async function setArchived(payload = {}) {
     const session = findWorkspaceSession();
     const tourId = String(payload.tourId || "").trim();
     if (!session) return { ok: false, error: "no Copilot session is bound to this window" };
     if (!SLUG_PATTERN.test(tourId)) return { ok: false, error: "a tourId is required" };
 
-    const timer = pending.get(tourId);
-    if (timer) {
-        clearTimeout(timer);
-        pending.delete(tourId);
-        const saved = save(tourId);
-        if (!saved.ok) return saved;
-    }
+    const savedProgress = flushProgress(tourId);
+    if (savedProgress && !savedProgress.ok) return savedProgress;
 
     const record = scan({ sessionId: session.id }).find((entry) => entry.tourId === tourId);
     if (!record) return { ok: false, error: `no tour called '${tourId}' was found` };
@@ -542,7 +708,7 @@ function setArchived(payload = {}) {
     if (archived) {
         tour.unload(tourId);
     } else if (!tour.has(tourId)) {
-        const loaded = loadFromDisk(tourId, session.id);
+        const loaded = await loadFromDisk(tourId, session.id);
         if (!loaded.ok) {
             record.archivedAt = previousArchivedAt;
             record.updatedAt = new Date().toISOString();
@@ -622,9 +788,17 @@ async function importTour(payload = {}) {
 
     const importedAt = payload.importedAt || new Date().toISOString();
     const now = new Date().toISOString();
+    const {
+        file: _sourceFile,
+        authoredCurrent: _sourceAuthoredCurrent,
+        publicationId: _sourcePublicationId,
+        revisionState: _sourceRevisionState,
+        sourceFile: _liveSourceFile,
+        sourceSessionId: _liveSourceSessionId,
+        ...sourceRecord
+    } = source;
     const record = {
-        ...source,
-        file: undefined,
+        ...sourceRecord,
         tourId,
         sessionId: session.id,
         endpointId: null,
@@ -645,12 +819,16 @@ async function importTour(payload = {}) {
     const file = fileFor(session.dir, tourId);
     try {
         atomic.writeJson(file, record);
+        fs.rmSync(progressFileFor(session.dir, tourId), { force: true });
     } catch (err) {
         return { ok: false, error: `could not import the Tour: ${err.message}` };
     }
 
     const { steps, staleness } = resolveSteps(record);
-    const adopted = tour.adopt(liveTour(record, steps, staleness));
+    const revisions = await gitRevisions([record.publication?.repo].filter(Boolean));
+    const adopted = tour.adopt(
+        liveTour(record, steps, staleness, revisionFor(record, revisions)),
+    );
     if (!adopted) {
         // The file was already on disk, and leaving it there would mean an
         // import we reported as failed quietly reappearing at the next window
@@ -681,8 +859,14 @@ async function activateTour(payload = {}) {
         return { ok: false, error: "no Copilot session is bound to this window" };
     }
 
-    if (!tour.has(tourId)) {
-        const loaded = loadFromDisk(tourId, session.id);
+    const record = scan({ sessionId: session.id }).find((entry) => entry.tourId === tourId);
+    if (!record) return { ok: false, error: `no tour called '${tourId}' was found` };
+    const existing = tour.getTour(tourId);
+    const samePublication =
+        existing?.publicationId ===
+        (record.publication?.id || record.publicationId || publicationIdFor(record));
+    if (!samePublication || !Number.isInteger(payload.step)) {
+        const loaded = await loadFromDisk(tourId, session.id);
         if (!loaded.ok) return loaded;
     }
 
@@ -692,11 +876,15 @@ async function activateTour(payload = {}) {
     const entry = tour.getTour(tourId);
     return {
         ok: true,
-        result: { ...result.result, ...(entry?.staleness ? { staleness: entry.staleness } : {}) },
+        result: {
+            ...result.result,
+            ...(entry?.staleness ? { staleness: entry.staleness } : {}),
+            revisionState: entry?.revisionState || "unknown",
+        },
     };
 }
 
-function loadFromDisk(tourId, sessionId) {
+async function loadFromDisk(tourId, sessionId) {
     const record = scan({ sessionId }).find((r) => r.tourId === tourId);
     if (!record) return { ok: false, error: `no tour called '${tourId}' was found` };
 
@@ -709,11 +897,26 @@ function loadFromDisk(tourId, sessionId) {
         };
     }
 
-    const adopted = tour.adopt(liveTour(record, steps, staleness));
+    const revisions = await gitRevisions([record.publication?.repo].filter(Boolean));
+    const currentRevisionState = revisionFor(record, revisions);
+    const existing = tour.getTour(tourId);
+    const refreshed = liveTour(record, steps, staleness, currentRevisionState);
+    if (existing?.publicationId === refreshed.publicationId) {
+        refreshed.current = existing.current;
+    }
+    const adopted = tour.adopt(refreshed);
     if (!adopted) return { ok: false, error: "the tour library is full; close a tour first" };
 
     diag(`tour loaded from disk: ${tourId} ${JSON.stringify(staleness)}`);
-    return { ok: true, result: { tourId, steps: steps.length, staleness } };
+    return {
+        ok: true,
+        result: {
+            tourId,
+            steps: steps.length,
+            staleness,
+            revisionState: currentRevisionState,
+        },
+    };
 }
 
 /** Unloads a tour and deletes its file. */
@@ -753,13 +956,23 @@ function remove(payload = {}) {
             diag(`tour delete failed: ${record.file}: ${err.message}`);
         }
     }
+    let progressDeleted = null;
+    const progressFile = progressFileFor(session.dir, tourId);
+    try {
+        if (fs.existsSync(progressFile)) {
+            fs.rmSync(progressFile, { force: true });
+            progressDeleted = progressFile;
+        }
+    } catch (err) {
+        return { ok: false, error: `could not delete Tour progress: ${err.message}` };
+    }
 
     if (!unloaded && deleted.length === 0) {
         return { ok: false, error: `no tour called '${tourId}' was found` };
     }
 
     diag(`tour deleted: ${tourId} (unloaded=${unloaded}, files=${deleted.length})`);
-    return { ok: true, result: { tourId, unloaded, deleted } };
+    return { ok: true, result: { tourId, unloaded, deleted, progressDeleted } };
 }
 
 // --- lifecycle --------------------------------------------------------------
@@ -770,26 +983,27 @@ function remove(payload = {}) {
  * Deliberately this session only, and deliberately none activated: reopening a
  * window should show you what you had, not decide what you are looking at.
  */
-function restore() {
+async function restore() {
     const session = findWorkspaceSession();
     if (!session) return { restored: 0 };
 
+    const records = scan({ sessionId: session.id }).filter(
+        (record) =>
+            !record.archivedAt &&
+            classifyLegacy(record).status !== "legacy-copy",
+    );
+    const revisions = await gitRevisions(
+        records.map((record) => record.publication?.repo).filter(Boolean),
+    );
     let restored = 0;
-    for (const record of scan({ sessionId: session.id })) {
+    for (const record of records) {
         if (tour.has(record.tourId)) continue;
-        if (record.archivedAt) continue;
-        // Older builds copied a borrowed tour into the current session on the
-        // first cursor move. They preserved its original createdAt, so a tour
-        // older than the session that allegedly created it is provably such a
-        // clone. Leave it discoverable on disk, but do not auto-restore it.
-        if (classifyLegacy(record).status === "legacy-copy") {
-            diag(`skipped foreign tour clone during restore: ${record.tourId}`);
-            continue;
-        }
         const { steps, staleness } = resolveSteps(record);
         if (steps.length === 0) continue;
         if (
-            tour.adopt(liveTour(record, steps, staleness))
+            tour.adopt(
+                liveTour(record, steps, staleness, revisionFor(record, revisions)),
+            )
         ) {
             restored += 1;
         }
@@ -812,7 +1026,10 @@ function createdAtForSession(sessionDir) {
 }
 
 function activateExtension(context) {
-    tour.setPersistHandler(schedule);
+    tour.setPersistenceHandlers({
+        publication: publish,
+        progress: scheduleProgress,
+    });
     context.subscriptions.push({ dispose: flush });
 
     context.subscriptions.push(
@@ -836,16 +1053,16 @@ function activateExtension(context) {
                 result.ok ? `porthole: deleted '${tourId}'.` : `porthole: ${result.error}`,
             );
         }),
-        vscode.commands.registerCommand("porthole.tour.archive", (arg) => {
+        vscode.commands.registerCommand("porthole.tour.archive", async (arg) => {
             const tourId = idOf(arg);
             if (!tourId) return;
-            const result = setArchived({ tourId, archived: true });
+            const result = await setArchived({ tourId, archived: true });
             vscode.window.showInformationMessage(
                 result.ok ? `porthole: archived '${tourId}'.` : `porthole: ${result.error}`,
             );
         }),
         vscode.commands.registerCommand("porthole.tour.restoreArchived", async () => {
-            const archived = list({ includeArchived: true }).result.tours.filter(
+            const archived = (await list({ includeArchived: true })).result.tours.filter(
                 (entry) => entry.archivedAt,
             );
             if (archived.length === 0) {
@@ -864,7 +1081,7 @@ function activateExtension(context) {
                 { placeHolder: "Choose a Tour to return to this session's Tour Library" },
             );
             if (!picked) return;
-            const result = setArchived({ tourId: picked.tourId, archived: false });
+            const result = await setArchived({ tourId: picked.tourId, archived: false });
             vscode.window.showInformationMessage(
                 result.ok
                     ? `porthole: unarchived '${picked.tourId}'.`
@@ -882,12 +1099,12 @@ function activateExtension(context) {
     // costs nothing, and a workspace that settles late is still picked up.
     let attempt = 0;
     let restoreTimer = null;
-    const tryRestore = () => {
+    const tryRestore = async () => {
         restoreTimer = null;
         let found = false;
         try {
             found = Boolean(findWorkspaceSession());
-            if (found) restore();
+            if (found) await restore();
         } catch (err) {
             diag(`tour restore failed: ${err.message}`);
             found = true; // a failing restore is not worth retrying in a loop
@@ -923,11 +1140,15 @@ module.exports = {
     activateTour,
     remove,
     // internals, exported for the doctor and for probes
-    save,
+    publish,
+    saveProgress,
+    scheduleProgress,
     flush,
     restore,
     scan,
     resolveSteps,
     classifyLegacy,
     toursDir,
+    progressDir,
+    publicationIdFor,
 };

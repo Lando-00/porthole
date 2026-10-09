@@ -18,6 +18,8 @@ import { callCompanion, findCompanions } from "./companion.mjs";
 import { config, copilotHome } from "./config.mjs";
 import { launchEditor, resolveEditorTarget } from "./editor.mjs";
 import { projectRoot } from "./git.mjs";
+import { classifyOwnership } from "./ownership.mjs";
+import { withDeliveryNotes } from "./delivery-notes.mjs";
 
 // ---------------------------------------------------------------------------
 // Arguments
@@ -94,28 +96,13 @@ function windowSummary(companion) {
 }
 
 function companionHasSession(companion, sessionId, sessionFolder) {
-    if (sessionId && companion.sessionId === sessionId) return true;
-    if (
-        sessionFolder &&
-        companion.sessionFolder &&
-        String(companion.sessionFolder).toLowerCase() === String(sessionFolder).toLowerCase()
-    ) {
-        return true;
-    }
-
-    return Boolean(
-        sessionFolder &&
-            (companion.workspaceFolders || []).some(
-                (folder) =>
-                    String(folder || "").replace(/[\\/]+$/, "").toLowerCase() ===
-                    String(sessionFolder).replace(/[\\/]+$/, "").toLowerCase(),
-            ),
-    );
+    return classifyOwnership(companion, { sessionId, sessionPath: sessionFolder }) === "owned";
 }
 
 function isBoundToDifferentSession(companion, sessionId, sessionFolder) {
-    if (!companion.sessionId && !companion.sessionFolder) return false;
-    return !companionHasSession(companion, sessionId, sessionFolder);
+    return !["owned", "unbound"].includes(
+        classifyOwnership(companion, { sessionId, sessionPath: sessionFolder }),
+    );
 }
 
 /**
@@ -148,8 +135,24 @@ export function chooseWindowAction({
     if (!requested) {
         return { ok: false, action: "refuse", error: `unknown window mode '${mode}'`, candidates };
     }
+    if (windowId && requested !== "reuse") {
+        return {
+            ok: false,
+            action: "refuse",
+            error: "windowId requires mode 'reuse'; omit windowId for automatic or new-window behavior",
+            candidates,
+        };
+    }
 
     if (requested === "new") return { ok: true, action: "new-workspace", candidates: [] };
+    if (requested === "reuse" && !sessionId && !sessionFolder) {
+        return {
+            ok: false,
+            action: "refuse",
+            error: "this Copilot session's identity is unknown; no window can be safely reused",
+            candidates,
+        };
+    }
 
     const exact = companions.filter((c) => companionHasSession(c, sessionId, sessionFolder));
     if (requested === "auto") {
@@ -545,13 +548,14 @@ async function revealPlanFile(session, plan) {
         { file: plan.planFile.path, startLine: 1, endLine: 1 },
         {
             contextPath: plan.projectRoot,
+            sessionId: plan.sessionId,
             sessionPath: plan.sessionFolder,
             windowId: plan.companion?.windowId,
         },
     );
-    if (result.ok) return "revealed plan.md";
+    if (result.ok) return withDeliveryNotes(result, "revealed plan.md");
 
-    return `could not reveal plan.md - ${result.error || result.reason}`;
+    return withDeliveryNotes(result, `could not reveal plan.md - ${result.error || result.reason}`);
 }
 
 /**
@@ -576,14 +580,26 @@ export async function openSession(session, ctx, options = {}) {
     }
 
     if (plan.action === "reuse-window") {
+        if (!plan.sessionId || !plan.sessionFolder) {
+            return "porthole: this Copilot session's folder is unavailable; the selected window was not changed.";
+        }
         const folders = [plan.projectRoot, plan.sessionFolder].filter(Boolean);
         const added = await callCompanion(
             "workspace-add",
             { folders },
-            { windowId: plan.companion.windowId, contextPath: plan.projectRoot },
+            {
+                windowId: plan.companion.windowId,
+                contextPath: plan.projectRoot,
+                sessionId: plan.sessionId,
+                sessionPath: plan.sessionFolder,
+                adoptUnbound: classifyOwnership(plan.companion, {
+                    sessionId: plan.sessionId,
+                    sessionPath: plan.sessionFolder,
+                }) === "unbound",
+            },
         );
         if (!added.ok) {
-            return `porthole: could not reuse the selected window - ${added.error || added.reason}`;
+            return withDeliveryNotes(added, `porthole: could not reuse the selected window - ${added.error || added.reason}`);
         }
 
         let planNote = "";
@@ -591,7 +607,7 @@ export async function openSession(session, ctx, options = {}) {
             planNote = `\n  ${await revealPlanFile(session, plan)}`;
         }
 
-        return (
+        return withDeliveryNotes(added,
             `porthole: reused the selected ${plan.companion.appName} window.\n` +
             `  project: ${plan.projectRoot}\n` +
             `  session: ${plan.sessionFolder || "no session folder on disk yet"}${planNote}`
@@ -708,15 +724,16 @@ export async function focusWindow(options = {}, session = null) {
     const sessionPath = resolveSessionPath(session, null);
     const result = await callCompanion("focus", null, {
         contextPath: process.cwd(),
+        sessionId: resolveSessionId(session, null),
         sessionPath,
         windowId: options.windowId || null,
     });
     if (!result.ok) {
-        return `porthole: could not focus the window - ${result.error || result.reason}`;
+        return withDeliveryNotes(result, `porthole: could not focus the window - ${result.error || result.reason}`);
     }
-    return result.focused
+    return withDeliveryNotes(result, result.focused
         ? "porthole: focused the exact VS Code window for this Copilot session."
-        : "porthole: requested attention from the exact VS Code window for this Copilot session.";
+        : "porthole: requested attention from the exact VS Code window for this Copilot session.");
 }
 
 export function tools(getSession) {

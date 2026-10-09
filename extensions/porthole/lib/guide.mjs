@@ -80,7 +80,7 @@ const GROUPS = [
         needsCompanion: true,
         rows: [
             ["/walkthrough <what>", '"how errors are handled" - a narrated, steppable tour of it'],
-            ["/walkthrough what changed", "Builds it from the diff - a PR, or what Copilot just did"],
+            ["/walkthrough what changed", "Uses change evidence - large changes start with a file inventory"],
             ["/porthole tours", "What walkthroughs exist, and which have gone stale"],
             ["/tour-exit", "Stop walking the active tour (it stays in the library)"],
             ["/annotate <file:10-25> [note]", "Mark those lines with a note on hover"],

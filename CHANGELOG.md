@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+**Tours stay in the window you chose.** Presentation uses the session's primary
+window by default, or an explicitly selected owned window. The library remains
+session-owned. An explicit window ID can no longer bypass a conflicting binding.
+
+**Navigation preserves the explanation's original evidence.** Publication
+captures anchors once; cursor autosaves keep progress separately. A step requires
+its target file to be saved, and an on-demand advisory reports repository
+revision changes without claiming that the narration is incorrect.
+
+**Delivery distinguishes uncertainty from failure.** Updated pairs deduplicate
+bounded retries within the same live companion. Broadcast waits share one
+deadline. Older pairs remain visibly legacy single-shot, without the new retry
+and receiver-side ownership guarantees.
+
+**Large changes return an inventory instead of overrunning a patch buffer.**
+File status and line-count accounting includes changes that cannot become Tour
+steps. Historical coordinates are labelled evidence for the model to interpret
+against current saved code, not guaranteed ready-to-display locations.
+
 ## 1.2.0
 
 **A walkthrough of a change now starts from the change.** Asking to be walked

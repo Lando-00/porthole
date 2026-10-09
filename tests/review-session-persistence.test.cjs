@@ -33,7 +33,12 @@ function writeReview(session, slug, overrides = {}) {
     return file;
 }
 
-function loadReviews({ session, warningAnswer, annotationEntries = [] } = {}) {
+function loadReviews({
+    session,
+    warningAnswer,
+    annotationEntries = [],
+    annotationSource = null,
+} = {}) {
     const annotationsApplied = [];
     const warnings = [];
     const mocks = new Map([
@@ -53,11 +58,16 @@ function loadReviews({ session, warningAnswer, annotationEntries = [] } = {}) {
             sessionRoot: () => path.dirname(session.dir),
         }],
         [path.join(SRC, "annotations.js"), {
-            getState: () => ({ entries: annotationEntries, title: null }),
-            annotate: async (payload) => annotationsApplied.push(payload),
+            getState: () => ({
+                entries: annotationEntries,
+                title: null,
+                source: annotationSource,
+            }),
+            restore: async (payload) => annotationsApplied.push(payload),
         }],
         [path.join(SRC, "tour.js"), {
             getState: () => ({ title: null, steps: [] }),
+            getTour: () => null,
         }],
         [path.join(SRC, "anchors.js"), {
             tally: () => ({ resolved: 0, shifted: 0, changed: 0, missing: 0 }),

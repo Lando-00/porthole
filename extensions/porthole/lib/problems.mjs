@@ -6,6 +6,7 @@
 
 import { callCompanion, explain } from "./companion.mjs";
 import { companionOptions } from "./target.mjs";
+import { withDeliveryNotes } from "./delivery-notes.mjs";
 
 const SEVERITIES = ["error", "warning", "info", "hint"];
 
@@ -62,8 +63,8 @@ export async function problems(args = {}, sessionSource = null) {
         companionOptions(root, sessionSource),
     );
 
-    if (!result.ok) return `porthole: ${explain(result)}`;
-    return format(result.result, root);
+    if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
+    return withDeliveryNotes(result, format(result.result, root));
 }
 
 export function tools(getSession = null) {

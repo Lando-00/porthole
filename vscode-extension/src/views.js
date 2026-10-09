@@ -306,9 +306,25 @@ class TourProvider {
         const drifted = entry.steps.filter(
             (s) => s.status === "changed" || s.status === "missing",
         ).length;
-        const description = isActive
+        const baseDescription = isActive
             ? `${entry.current + 1}/${entry.steps.length}`
             : `${entry.steps.length} steps`;
+        const revisionChanged = entry.revisionState === "revision-changed";
+        const revisionUnknown = entry.revisionState === "unknown";
+        const revisionSame = entry.revisionState === "same-revision";
+        const description = [
+            baseDescription,
+            drifted > 0 ? `${drifted} stale` : null,
+            revisionChanged
+                ? "revision changed"
+                : revisionUnknown
+                  ? "revision unknown"
+                  : revisionSame
+                    ? "same revision"
+                    : null,
+        ]
+            .filter(Boolean)
+            .join(" · ");
 
         const tooltip = new vscode.MarkdownString();
         tooltip.isTrusted = false;
@@ -320,14 +336,31 @@ class TourProvider {
                 `\n\n⚠ ${drifted} step${drifted === 1 ? "" : "s"} no longer match the code they were written about.`,
             );
         }
+        if (revisionChanged) {
+            tooltip.appendMarkdown(
+                "\n\nRepository revision changed since this Tour was published; the explanation may need updating.",
+            );
+        } else if (revisionUnknown) {
+            tooltip.appendMarkdown(
+                "\n\nRepository revision could not be compared with this Tour's publication.",
+            );
+        } else if (revisionSame) {
+            tooltip.appendMarkdown(
+                "\n\nRepository revision matches this Tour's publication. This does not verify the explanation.",
+            );
+        }
 
         return new Node(entry.title, vscode.TreeItemCollapsibleState[isActive ? "Expanded" : "Collapsed"], {
             id: `tour-${entry.tourId}`,
-            description: drifted > 0 ? `${description} · ${drifted} stale` : description,
+            description,
             tooltip,
             iconPath: themed(
-                isActive ? "play-circle" : drifted > 0 ? "warning" : "compass",
-                isActive ? "charts.blue" : drifted > 0 ? "charts.yellow" : undefined,
+                isActive ? "play-circle" : drifted > 0 || revisionChanged ? "warning" : "compass",
+                isActive
+                    ? "charts.blue"
+                    : drifted > 0 || revisionChanged
+                      ? "charts.yellow"
+                      : undefined,
             ),
             children,
             // Drives the context menu: only an inactive tour offers "activate",

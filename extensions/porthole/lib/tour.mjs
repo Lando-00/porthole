@@ -21,6 +21,8 @@ import { isAbsolute, resolve } from "node:path";
 import { callCompanion, explain } from "./companion.mjs";
 import { ensureCompanion } from "./ensure.mjs";
 import { companionOptions } from "./target.mjs";
+import { isGitRepo, projectRoot } from "./git.mjs";
+import { withDeliveryNotes } from "./delivery-notes.mjs";
 
 const MAX_STEPS = 50;
 
@@ -66,8 +68,10 @@ export async function tour(args = {}, getSession = null) {
         return `porthole: none of those files exist - ${unresolved.join(", ")}`;
     }
 
+    const sourceRepo = isGitRepo(root) ? projectRoot(root) : null;
     const { note: openNote } = await ensureCompanion(getSession, {
         openIfClosed: args.openIfClosed === true,
+        windowId: args.windowId,
     });
 
     const result = await callCompanion(
@@ -78,11 +82,22 @@ export async function tour(args = {}, getSession = null) {
             steps,
             activate: args.activate !== false,
             replace: args.replace,
+            sourceRepo,
         },
-        companionOptions(root, getSession),
+        companionOptions(root, getSession, { windowId: args.windowId }),
     );
 
-    if (!result.ok) return `porthole: ${explain(result)}${openNote}`;
+    if (!result.ok) {
+        if (result.result?.saved) {
+            const savedId = result.result.tourId || args.tourId || "the Tour";
+            return withDeliveryNotes(
+                result,
+                `porthole: saved '${savedId}' in the Tour Library, but did not display it - ` +
+                    `${result.error || explain(result)}${openNote}`,
+            );
+        }
+        return withDeliveryNotes(result, `porthole: ${explain(result)}${openNote}`);
+    }
 
     const skipped = [
         ...unresolved,
@@ -110,7 +125,7 @@ export async function tour(args = {}, getSession = null) {
     if (library > 1) message += ` ${library} tours are now loaded.`;
     if (skipped.length) message += `\nSkipped: ${skipped.join("; ")}`;
 
-    return message;
+    return withDeliveryNotes(result, message);
 }
 
 // --- listing ----------------------------------------------------------------
@@ -124,13 +139,16 @@ export async function tours(args = {}, sessionSource = null) {
             repo: args.repo,
             limit: args.limit,
         },
-        companionOptions(process.cwd(), sessionSource),
+        companionOptions(process.cwd(), sessionSource, { windowId: args.windowId }),
     );
-    if (!result.ok) return `porthole: ${explain(result)}`;
+    if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
 
     const list = result.result?.tours || [];
     if (list.length === 0) {
-        return "porthole: this Copilot session's Tour Library is empty.";
+        return withDeliveryNotes(
+            result,
+            "porthole: this Copilot session's Tour Library is empty.",
+        );
     }
 
     const lines = [`porthole: ${list.length} tour(s).`];
@@ -144,6 +162,10 @@ export async function tours(args = {}, sessionSource = null) {
 
         const stale = describeStaleness(t.staleness);
         if (stale) bits.push(stale);
+        if (t.revisionState === "revision-changed") bits.push("REVISION CHANGED");
+        else if (t.revisionState === "unknown") bits.push("revision unknown");
+        else if (t.revisionState === "same-revision") bits.push("same revision");
+        if (t.savedPublicationChanged) bits.push("saved copy differs");
 
         lines.push(`  ${t.tourId} - "${t.title}" (${bits.join(", ")})`);
 
@@ -161,8 +183,17 @@ export async function tours(args = {}, sessionSource = null) {
                 "Say so before walking the user through it, and offer to rebuild it.",
         );
     }
+    if (list.some((t) => t.revisionState === "revision-changed")) {
+        lines.push(
+            "\nRepository revision changed since this Tour was published; " +
+                "the explanation may need updating.",
+        );
+    }
+    if (list.some((t) => t.savedPublicationChanged)) {
+        lines.push("\nA saved publication differs from this window's loaded copy. Explicitly activate that Tour to load the saved publication.");
+    }
 
-    return lines.join("\n");
+    return withDeliveryNotes(result, lines.join("\n"));
 }
 
 export async function discoverTours(args = {}, sessionSource = null) {
@@ -177,10 +208,15 @@ export async function discoverTours(args = {}, sessionSource = null) {
         },
         companionOptions(process.cwd(), sessionSource),
     );
-    if (!result.ok) return `porthole: ${explain(result)}`;
+    if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
 
     const list = result.result?.tours || [];
-    if (list.length === 0) return "porthole: Saved Tour Discovery found no matching Tours.";
+    if (list.length === 0) {
+        return withDeliveryNotes(
+            result,
+            "porthole: Saved Tour Discovery found no matching Tours.",
+        );
+    }
 
     const lines = [`porthole: Saved Tour Discovery found ${list.length} Tour(s).`];
     for (const entry of list) {
@@ -206,7 +242,7 @@ export async function discoverTours(args = {}, sessionSource = null) {
             );
         }
     }
-    return lines.join("\n");
+    return withDeliveryNotes(result, lines.join("\n"));
 }
 
 export async function importSavedTour(args = {}, sessionSource = null) {
@@ -220,18 +256,20 @@ export async function importSavedTour(args = {}, sessionSource = null) {
         },
         companionOptions(process.cwd(), sessionSource),
     );
-    if (!result.ok) return `porthole: ${explain(result)}`;
+    if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
     if (result.cancelled || result.imported === false) {
-        return (
+        return withDeliveryNotes(
+            result,
             "porthole: import cancelled; the source Tour and current Tour Library are unchanged." +
-            (result.suggestedTourId ? ` Suggested id: ${result.suggestedTourId}.` : "")
+                (result.suggestedTourId ? ` Suggested id: ${result.suggestedTourId}.` : ""),
         );
     }
 
     const imported = result.result || result;
-    return (
+    return withDeliveryNotes(
+        result,
         `porthole: imported '${args.sourceTourId}' as '${imported.tourId}' into this ` +
-        "Copilot session's Tour Library. The historical source remains unchanged."
+            "Copilot session's Tour Library. The historical source remains unchanged.",
     );
 }
 
@@ -244,14 +282,18 @@ export async function cleanupLegacyTour(args = {}, sessionSource = null) {
         },
         companionOptions(process.cwd(), sessionSource),
     );
-    if (!result.ok) return `porthole: ${explain(result)}`;
+    if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
     if (result.cancelled || result.deleted === false) {
-        return "porthole: legacy cleanup cancelled; no stored Tour was changed.";
+        return withDeliveryNotes(
+            result,
+            "porthole: legacy cleanup cancelled; no stored Tour was changed.",
+        );
     }
     const cleaned = result.result || result;
-    return (
+    return withDeliveryNotes(
+        result,
         `porthole: deleted the exact legacy copy '${cleaned.sourceTourId}' from ` +
-        `session '${cleaned.sourceSessionId}'. Other same-ID Tours were untouched.`
+            `session '${cleaned.sourceSessionId}'. Other same-ID Tours were untouched.`,
     );
 }
 
@@ -261,7 +303,7 @@ function describeStaleness(s) {
     if (s.shifted) parts.push(`${s.shifted} moved`);
     if (s.changed) parts.push(`${s.changed} changed`);
     if (s.missing) parts.push(`${s.missing} gone`);
-    return parts.length ? `stale: ${parts.join(", ")}` : "still current";
+    return parts.length ? `saved ranges: ${parts.join(", ")}` : "saved ranges match";
 }
 
 // --- activate / close / delete / goto ---------------------------------------
@@ -269,6 +311,15 @@ function describeStaleness(s) {
 export async function manage(args = {}, sessionSource = null) {
     const action = String(args.action || "activate");
     const tourId = String(args.tourId || "").trim();
+    const presentationAction =
+        action === "activate" || action === "goto" || action === "close";
+
+    if (args.windowId && !presentationAction) {
+        return (
+            `porthole: windowId is only valid for activate, goto, or close. ` +
+            `'${action}' changes the session-owned Tour artifact on the primary window.`
+        );
+    }
 
     if (action !== "close" && !tourId) {
         return "porthole: which tour? Call porthole_tours to see the ids.";
@@ -278,31 +329,42 @@ export async function manage(args = {}, sessionSource = null) {
         const result = await callCompanion(
             "tour-activate",
             { tourId, step: Number.isInteger(args.step) ? args.step : undefined },
-            companionOptions(process.cwd(), sessionSource),
+            companionOptions(process.cwd(), sessionSource, { windowId: args.windowId }),
         );
-        if (!result.ok) return `porthole: ${explain(result)}`;
+        if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
 
-        const { title, steps, current, staleness } = result.result || {};
+        const { title, steps, current, staleness, revisionState } = result.result || {};
         let message = `porthole: now walking "${title}" (${steps} steps), at step ${(current ?? 0) + 1}.`;
         const stale = describeStaleness(staleness);
-        if (staleness && stale !== "still current") {
+        if (staleness && (staleness.changed || staleness.missing)) {
             message +=
                 `\nThis tour came off disk and ${stale}. Tell the user before walking them ` +
                 "through it - the narration was written about code that has since moved on.";
+        } else if (staleness?.shifted) {
+            message +=
+                `\nThis Tour's saved code moved; its anchored range was relocated before display.`;
         }
-        return message;
+        if (revisionState === "revision-changed") {
+            message +=
+                "\nRepository revision changed since this Tour was published; " +
+                "the explanation may need updating.";
+        } else if (revisionState === "unknown") {
+            message += "\nThe Tour's publication revision could not be compared.";
+        }
+        return withDeliveryNotes(result, message);
     }
 
     if (action === "close") {
         const result = await callCompanion(
             "tour-exit",
             tourId ? { tourId } : {},
-            companionOptions(process.cwd(), sessionSource),
+            companionOptions(process.cwd(), sessionSource, { windowId: args.windowId }),
         );
-        if (!result.ok) return `porthole: ${explain(result)}`;
-        return (
+        if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
+        return withDeliveryNotes(
+            result,
             `porthole: stopped walking ${tourId ? `'${tourId}'` : "the active tour"}. ` +
-            "It is still in the library and still saved - use delete to remove it."
+                "It is still in the library and still saved - use delete to remove it.",
         );
     }
 
@@ -312,8 +374,11 @@ export async function manage(args = {}, sessionSource = null) {
             { tourId },
             companionOptions(process.cwd(), sessionSource),
         );
-        if (!result.ok) return `porthole: ${explain(result)}`;
-        return `porthole: deleted '${tourId}' from the library and from disk.`;
+        if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
+        return withDeliveryNotes(
+            result,
+            `porthole: deleted '${tourId}' from the library and from disk.`,
+        );
     }
 
     if (action === "archive" || action === "unarchive") {
@@ -322,10 +387,13 @@ export async function manage(args = {}, sessionSource = null) {
             { tourId, archived: action === "archive" },
             companionOptions(process.cwd(), sessionSource),
         );
-        if (!result.ok) return `porthole: ${explain(result)}`;
-        return action === "archive"
-            ? `porthole: archived '${tourId}'. It is hidden from the default Tour Library but remains saved.`
-            : `porthole: unarchived '${tourId}'. It is back in this session's Tour Library.`;
+        if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
+        return withDeliveryNotes(
+            result,
+            action === "archive"
+                ? `porthole: archived '${tourId}'. It is hidden from the default Tour Library but remains saved.`
+                : `porthole: unarchived '${tourId}'. It is back in this session's Tour Library.`,
+        );
     }
 
     return `porthole: '${action}' is not one of activate, goto, close, archive, unarchive, delete.`;
@@ -338,9 +406,12 @@ export async function exitTour(sessionSource = null) {
         {},
         companionOptions(process.cwd(), sessionSource),
     );
-    return result.ok
-        ? "porthole: stopped walking the active tour. It stays in the library."
-        : `porthole: ${explain(result)}`;
+    return withDeliveryNotes(
+        result,
+        result.ok
+            ? "porthole: stopped walking the active tour. It stays in the library."
+            : `porthole: ${explain(result)}`,
+    );
 }
 
 // --- the model-facing surface ------------------------------------------------
@@ -431,6 +502,12 @@ export function tools(getSession = null) {
                             "something, e.g. the /walkthrough command - it takes over their " +
                             "screen, so never set it on a tour you decided to build yourself.",
                     },
+                    windowId: {
+                        type: "string",
+                        description:
+                            "Optional owned Porthole window to present this Tour in. The target " +
+                            "must be supplied again on follow-up calls; omitting it uses the primary.",
+                    },
                 },
                 required: ["steps"],
             },
@@ -469,6 +546,12 @@ export function tools(getSession = null) {
                         description: "Only tours saved against this repository path.",
                     },
                     limit: { type: "integer", description: "Maximum tours to return. Default 50." },
+                    windowId: {
+                        type: "string",
+                        description:
+                            "Optional owned Porthole window whose loaded and active Tour state " +
+                            "should be queried. Omitting it queries the primary.",
+                    },
                 },
             },
             handler: async (args) => tours(args, getSession),
@@ -561,6 +644,12 @@ export function tools(getSession = null) {
                     step: {
                         type: "integer",
                         description: "For 'goto': the step to jump to, 0-based.",
+                    },
+                    windowId: {
+                        type: "string",
+                        description:
+                            "Optional owned Porthole window for activate, goto, or close. It is " +
+                            "rejected for archive, unarchive, and delete.",
                     },
                 },
                 required: ["tourId"],

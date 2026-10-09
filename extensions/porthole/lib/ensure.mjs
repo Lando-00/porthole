@@ -15,6 +15,7 @@
 
 import { findCompanions, isCompanionInstalled } from "./companion.mjs";
 import { openSession, planOpenSession, resolveSessionId, resolveSessionPath } from "./opensession.mjs";
+import { classifyOwnership } from "./ownership.mjs";
 
 // Long enough for a cold VS Code start plus extension-host activation, short
 // enough that a window which is never coming does not hold the session. Polled
@@ -29,17 +30,7 @@ const POLL_MS = 250;
  * window is not success; the new window must publish this session id/folder.
  */
 function matchesSession(companion, sessionId, sessionPath) {
-    if (sessionId && companion.sessionId === sessionId) return true;
-    if (
-        sessionPath &&
-        companion.sessionFolder &&
-        companion.sessionFolder.toLowerCase() === sessionPath.toLowerCase()
-    ) {
-        return true;
-    }
-    return (companion.workspaceFolders || []).some(
-        (folder) => sessionPath && String(folder).toLowerCase() === sessionPath.toLowerCase(),
-    );
+    return classifyOwnership(companion, { sessionId, sessionPath }) === "owned";
 }
 
 async function waitForCompanion(timeoutMs, sessionId, sessionPath) {
@@ -61,6 +52,7 @@ async function waitForCompanion(timeoutMs, sessionId, sessionPath) {
  * exists to prevent - so on timeout this returns a note to append, not a claim.
  */
 export async function ensureCompanion(getSession, options = {}) {
+    if (options.windowId) return { opened: false, note: "" };
     if (options.openIfClosed !== true) return { opened: false, note: "" };
     const session = typeof getSession === "function" ? getSession() : null;
     if (!session) return { opened: false, note: "" };

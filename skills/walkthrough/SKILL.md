@@ -39,17 +39,21 @@ Look at the code properly first. A walkthrough built from a guess is worse than
 prose, because it points at specific lines with authority.
 
 **If the subject is a change** — a pull request, a branch, "what you just did",
-"what changed" — call `porthole_changes` first. It returns the changed hunks as
-candidate steps, so you do not have to hunt for them and cannot silently miss a
-file. Drop the candidates that do not earn a stop, order what is left the way
-control flows, and say how many you left out.
+"what changed" — call `porthole_changes` first. Use its comparison and file
+inventory to establish what changed. Small comparisons include candidate
+locations; large ones provide an inventory for you to investigate directly.
+State any omissions or incomplete collection instead of implying full coverage.
 
-If it reports that a pull request is not checked out, give the user the exact
-command and stop. Never build a walkthrough from line numbers that do not match
-the files on their screen.
+Read the current saved files before choosing the Tour's locations. Index and
+historical coordinates are evidence about that comparison, not guaranteed
+locations in the user's current code. Clarify intent when the requested change
+and the available checkout do not answer the same question.
 
-Call `porthole_tours` first. If a walkthrough of this already exists, extend or
+Call `porthole_tours` before publishing. If a walkthrough of this already exists, extend or
 replace it rather than adding a near-duplicate, and say which you did.
+
+A revision advisory means the repository changed, not that the explanation is
+wrong. Inspect the relevant code before deciding whether an update is needed.
 
 **3. Build one walkthrough, then hand over.**
 
@@ -58,6 +62,15 @@ step through it, and that they can ask you about any step here.
 
 Then **stop**. Do not narrate the tour again in chat. The whole point is that the
 explanation is attached to the code, not repeated beside it.
+
+The primary window is the default. When the user chooses another owned window,
+carry that explicit target through creation, listing and navigation. A Tour is
+still saved in the session's library, not owned by that individual window.
+
+If the target file has unsaved edits, ask the user to save it before displaying
+the step. A Tour saved but not displayed is not a delivered Walkthrough.
+If delivery is unconfirmed, establish what happened before issuing the action
+again; a new tool call is not a deduplicated retry of the old one.
 
 ## What the user sees
 

@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 
 import { callCompanion, explain } from "./companion.mjs";
 import { companionOptions } from "./target.mjs";
+import { withDeliveryNotes } from "./delivery-notes.mjs";
 
 const MAX_WAIT_MS = 30 * 60 * 1000;
 
@@ -32,11 +33,11 @@ export async function previewChanges(args, sessionSource) {
             timeoutMs: MAX_WAIT_MS,
         },
     );
-    if (!result.ok) return `porthole: ${explain(result)}`;
+    if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
     if (result.cancelled || result.applied === false) {
-        return "porthole: the user cancelled the proposed changes; no project files were changed.";
+        return withDeliveryNotes(result, "porthole: the user cancelled the proposed changes; no project files were changed.");
     }
-    return (
+    return withDeliveryNotes(result,
         `porthole: applied ${result.files.length} reviewed file change` +
         `${result.files.length === 1 ? "" : "s"} from VS Code.\n` +
         result.files.map((file) => `  ${file}`).join("\n")

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Guarded operations validate the expected session and deduplicate bounded
+  retries in the same live host. Older callers retain explicit legacy one-shot
+  compatibility; lost confirmation is not proof of non-execution.
+- Tours display in one selected session-owned window rather than broadcasting.
+- Original anchors and publication metadata survive navigation. Cursor autosaves
+  write progress separately from the authored Tour.
+- Step presentation requires a saved target buffer. An on-demand repository
+  revision advisory leaves explanation refresh decisions to the user and model.
+- Promoting existing findings preserves inherited source evidence.
+
 ## 1.1.0
 
 - The heartbeat now publishes `startedAt`, so a Copilot session that owns

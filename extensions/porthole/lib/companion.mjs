@@ -1,20 +1,17 @@
 // Talking to the porthole companion VS Code extension.
 //
-// The CLI can only push a URI at the editor, which is fire-and-forget: spawning
-// the launcher always "succeeds", so a window that never received the request
-// looks exactly like one that acted on it. That is how a broken /cops could
-// report success while opening nothing.
+// Requests use the exact window's addressed inbox and a separately addressed
+// acknowledgement. Updated peers add one stable logical operation identity
+// across bounded delivery retries, so losing an ack does not repeat the effect.
 //
-// So requests go out as a payload file plus a URI, and the companion writes a
-// result file back:
+// Older addressed companions still receive one legacy attempt:
 //
-//   write   <tmp>/porthole/req/<requestId>.json
-//   fire    vscode-insiders://lando-00.porthole-companion/<route>?req=<requestId>
+//   write   ~/.copilot/porthole/inbox/<windowId>/<requestId>.json
 //   poll    <tmp>/porthole/ack/<requestId>.json
 //
-// No socket, no port, nothing listening in the background.
+// No socket, no port, no cross-window URI fallback.
 
-import { spawn } from "node:child_process";
+import { performance } from "node:perf_hooks";
 import {
     existsSync,
     mkdirSync,
@@ -28,11 +25,15 @@ import {
 } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { tmpdir, homedir, uptime } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 
 import { config, copilotHome } from "./config.mjs";
-import { companionSupportsRoute } from "./capabilities.mjs";
-import { connectedIdes, pathsRelated, resolveEditorExe, resolveEditorTarget, whichEditor } from "./editor.mjs";
+import {
+    companionSupportsRoute,
+    companionSupportsSessionOwnedOperations,
+} from "./capabilities.mjs";
+import { connectedIdes } from "./editor.mjs";
+import { classifyOwnership, sessionIdentity } from "./ownership.mjs";
 
 const ROOT = join(tmpdir(), "porthole");
 const REQ_DIR = join(ROOT, "req");
@@ -45,16 +46,20 @@ const POLL_MIN_MS = 2;
 const POLL_MAX_MS = 50;
 const POLL_GROWTH = 1.4;
 const MAX_AGE_MS = 60 * 60 * 1000;
+const MAX_REQUEST_BYTES = 6 * 1024 * 1024;
 // Litter is bounded by MAX_AGE_MS, so sweeping on every single request buys
 // nothing and costs a readdir plus a stat per leftover file each time.
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
-// A sleep that overruns its timer by more than this was the machine suspending
-// or the wall clock moving, not the companion being slow.
+// A scheduled wait that overruns by more than this was the machine suspending
+// or the event loop being frozen, not active time the companion could use.
 const SUSPEND_THRESHOLD_MS = 5000;
 const WINDOW_ID = /^[a-f0-9]{16}$/;
 // Anything written before this machine last booted was written by a process
 // that is definitively gone, whatever the pid says now.
 const BOOT_SLACK_MS = 60 * 1000;
+const SESSION_OPERATION_VERSION = 1;
+const OPERATION_EXPIRY_ALLOWANCE_MS = 5000;
+const RETRY_OFFSETS_MS = Object.freeze([250, 750]);
 
 /**
  * When this machine booted, give or take.
@@ -174,23 +179,6 @@ export function findCompanions() {
     return found.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
 }
 
-function sessionIdFromPath(sessionPath) {
-    return sessionPath ? basename(String(sessionPath).replace(/[\\/]+$/, "")) : null;
-}
-
-function sameSession(companion, { sessionId, sessionPath }) {
-    if (sessionId && companion.sessionId === sessionId) return true;
-    if (sessionPath && companion.sessionFolder && samePath(sessionPath, companion.sessionFolder)) {
-        return true;
-    }
-    return Boolean(
-        sessionPath &&
-            (companion.workspaceFolders || []).some(
-                (folder) => folder && samePath(sessionPath, String(folder)),
-            ),
-    );
-}
-
 function describeCandidate(companion) {
     return {
         windowId: companion.windowId || null,
@@ -230,11 +218,14 @@ function byAge(a, b) {
  * a visual route should reach.
  */
 export function ownedCompanions(options = {}) {
-    const sessionId = options.sessionId || sessionIdFromPath(options.sessionPath);
-    if (!sessionId && !options.sessionPath) return [];
+    const expected = sessionIdentity({
+        sessionId: options.sessionId,
+        sessionPath: options.sessionPath,
+    });
+    if (!expected.sessionId && !expected.sessionPath) return [];
     const companions = options.companions || findCompanions();
     return companions
-        .filter((c) => sameSession(c, { sessionId, sessionPath: options.sessionPath }))
+        .filter((companion) => classifyOwnership(companion, expected) === "owned")
         .sort(byAge);
 }
 
@@ -250,22 +241,46 @@ export function ownedCompanions(options = {}) {
  * genuinely undecidable cases still refuse.
  */
 export function chooseCompanion(companions, options = {}) {
-    if (companions.length === 0) return { companion: null, reason: "absent", candidates: [] };
+    const expected = sessionIdentity({
+        sessionId: options.sessionId,
+        sessionPath: options.sessionPath,
+    });
+    const hasExpected = Boolean(expected.sessionId || expected.sessionPath);
 
     if (options.windowId) {
         const match = companions.find((c) => c.windowId === options.windowId);
-        return match
-            ? { companion: match, reason: null, candidates: [] }
+        if (!match) {
+            return {
+                companion: null,
+                reason: "unknown-window",
+                windowId: options.windowId,
+                candidates: companions.map(describeCandidate),
+            };
+        }
+        if (!hasExpected) {
+            return {
+                companion: null,
+                reason: "unknown-session",
+                candidates: [describeCandidate(match)],
+            };
+        }
+
+        const ownership = classifyOwnership(match, expected);
+        const allowUnbound =
+            ownership === "unbound" &&
+            (options.adoptUnbound === true || options.inspectUnbound === true);
+        return ownership === "owned" || allowUnbound
+            ? { companion: match, reason: null, candidates: [], ownership }
             : {
                   companion: null,
-                  reason: "unknown-window",
-                  candidates: companions.map(describeCandidate),
+                  reason: `ownership-${ownership}`,
+                  candidates: [describeCandidate(match)],
               };
     }
 
-    const sessionId = options.sessionId || sessionIdFromPath(options.sessionPath);
+    if (companions.length === 0) return { companion: null, reason: "absent", candidates: [] };
     const sessionMatches = companions
-        .filter((c) => sameSession(c, { sessionId, sessionPath: options.sessionPath }))
+        .filter((companion) => classifyOwnership(companion, expected) === "owned")
         .sort(byAge);
     if (sessionMatches.length > 0) {
         return {
@@ -276,15 +291,7 @@ export function chooseCompanion(companions, options = {}) {
         };
     }
 
-    if (sessionId || options.sessionPath) {
-        // A modern companion that names another session is not a project-path
-        // fallback. That is the exact cross-session misroute this selector
-        // exists to prevent. A sole legacy companion may still be used while
-        // the separately-published VSIX catches up.
-        const legacy = companions.filter((c) => !c.windowId && !c.sessionId);
-        if (companions.length === 1 && legacy.length === 1) {
-            return { companion: legacy[0], reason: null, candidates: [] };
-        }
+    if (hasExpected) {
         return {
             companion: null,
             reason: "session-missing",
@@ -292,28 +299,9 @@ export function chooseCompanion(companions, options = {}) {
         };
     }
 
-    if (options.contextPath) {
-        const matches = companions.filter((c) =>
-            (c.workspaceFolders || []).some(
-                (wf) => wf && pathsRelated(options.contextPath, String(wf)),
-            ),
-        );
-        if (matches.length === 1) return { companion: matches[0], reason: null, candidates: [] };
-        if (matches.length > 1) {
-            return {
-                companion: null,
-                reason: "ambiguous",
-                candidates: matches.map(describeCandidate),
-            };
-        }
-    }
-
-    if (companions.length === 1) {
-        return { companion: companions[0], reason: null, candidates: [] };
-    }
     return {
         companion: null,
-        reason: "ambiguous",
+        reason: "unknown-session",
         candidates: companions.map(describeCandidate),
     };
 }
@@ -386,39 +374,51 @@ const BROADCAST_ROUTES = new Set([
     "",
     "annotate",
     "annotate-clear",
-    "tour",
-    "tour-activate",
-    "tour-exit",
 ]);
 
 export async function callCompanion(route, payload = null, options = {}) {
     const contextPath = options.contextPath || null;
-    const timeoutMs = options.timeoutMs ?? config().companionTimeoutMs;
+    const configuredTimeout = options.timeoutMs ?? config().companionTimeoutMs;
+    const timeoutMs = Number.isFinite(Number(configuredTimeout))
+        ? Math.max(0, Number(configuredTimeout))
+        : config().companionTimeoutMs;
+    const wallStartedAt = Date.now();
+    const deadline = createSharedDeadline(timeoutMs);
 
     const selected = selectCompanion({
         contextPath,
         sessionPath: options.sessionPath,
         sessionId: options.sessionId,
         windowId: options.windowId,
+        adoptUnbound: options.adoptUnbound === true,
+        inspectUnbound: options.inspectUnbound === true,
     });
     const companion = selected.companion;
     if (!companion) {
-        if (
-            selected.reason === "ambiguous" ||
-            selected.reason === "unknown-window" ||
-            selected.reason === "session-missing"
-        ) {
+        if (selected.reason !== "absent") {
+            const ownership = String(selected.reason || "").replace(/^ownership-/, "");
+            const error =
+                selected.reason === "unknown-window"
+                    ? `the requested VS Code window '${options.windowId}' is no longer available`
+                    : selected.reason === "unknown-session"
+                      ? "this request has no verifiable Copilot session identity"
+                      : selected.reason === "session-missing"
+                        ? "no VS Code window is bound to this Copilot session"
+                        : ownership === "unbound"
+                          ? `the requested VS Code window '${options.windowId}' is unbound`
+                          : ownership === "foreign"
+                            ? `the requested VS Code window '${options.windowId}' belongs to another Copilot session`
+                            : ownership === "conflicted"
+                              ? `the requested VS Code window '${options.windowId}' has conflicting session bindings`
+                              : `the requested VS Code window '${options.windowId}' has unknown session ownership`;
             return {
                 ok: false,
-                reason:
-                    selected.reason === "session-missing" ? "absent" : selected.reason,
-                error:
-                    selected.reason === "unknown-window"
-                        ? `the requested VS Code window '${options.windowId}' is no longer available`
-                        : selected.reason === "session-missing"
-                          ? "no VS Code window is bound to this Copilot session"
-                        : "more than one VS Code window could handle this request",
+                reason: selected.reason === "session-missing" ? "absent" : selected.reason,
+                error,
                 candidates: selected.candidates,
+                ...(options.windowId
+                    ? { windowId: options.windowId }
+                    : {}),
             };
         }
         // Without a heartbeat there is nothing listening, and firing the URI
@@ -430,41 +430,113 @@ export async function callCompanion(route, payload = null, options = {}) {
         };
     }
 
-    const result = await deliverTo(companion, route, payload, {
-        contextPath,
-        timeoutMs,
-    });
-    result.windowId = companion.windowId || null;
+    if (
+        options.adoptUnbound === true &&
+        (route !== "workspace-add" || !options.windowId || selected.ownership !== "unbound")
+    ) {
+        return {
+            ok: false,
+            reason: "refused",
+            error:
+                "adopt-unbound is allowed only for workspace-add to an explicitly selected unbound window",
+            windowId: companion.windowId || null,
+            deliveryMode: companionSupportsSessionOwnedOperations(companion)
+                ? "guarded"
+                : "legacy-single-shot",
+        };
+    }
+    if (
+        options.inspectUnbound === true &&
+        (route !== "ping" || !options.windowId || selected.ownership !== "unbound")
+    ) {
+        return {
+            ok: false,
+            reason: "refused",
+            error:
+                "unbound inspection is allowed only for ping to an explicitly selected unbound window",
+            windowId: companion.windowId || null,
+            deliveryMode: "legacy-single-shot",
+        };
+    }
 
-    // Secondaries are best effort and deliberately sequential-after: the
-    // primary's answer is the answer, and a secondary that fails is reported
-    // rather than allowed to turn a successful request into a failed one.
+    let payloadSnapshot;
+    try {
+        payloadSnapshot = JSON.parse(JSON.stringify(payload));
+    } catch (error) {
+        return {
+            ok: false,
+            reason: "error",
+            error: `request payload could not be serialised: ${error.message}`,
+            windowId: companion.windowId || null,
+            deliveryMode: companionSupportsSessionOwnedOperations(companion)
+                ? "guarded"
+                : "legacy-single-shot",
+        };
+    }
+
+    ensureDirs();
+    sweep();
+
     const secondaries =
         !options.windowId && BROADCAST_ROUTES.has(route)
             ? (selected.owned || []).slice(1)
             : [];
-    if (result.ok && secondaries.length > 0) {
-        const alsoShownIn = [];
-        for (const other of secondaries) {
-            const echo = await deliverTo(other, route, payload, { contextPath, timeoutMs });
-            alsoShownIn.push({
-                windowId: other.windowId || null,
-                ok: Boolean(echo.ok),
-                error: echo.ok ? undefined : echo.error || echo.reason,
-            });
-        }
-        result.alsoShownIn = alsoShownIn;
+    const targets = Object.freeze([companion, ...secondaries]);
+    const expected = sessionIdentity({
+        sessionId: options.sessionId,
+        sessionPath: options.sessionPath,
+    });
+    const operationBase = Object.freeze({
+        version: SESSION_OPERATION_VERSION,
+        id: randomUUID(),
+        createdAt: new Date(wallStartedAt).toISOString(),
+        expiresAt: new Date(
+            wallStartedAt + timeoutMs + OPERATION_EXPIRY_ALLOWANCE_MS,
+        ).toISOString(),
+        sessionId: expected.sessionId,
+        sessionFolder: expected.sessionPath,
+        admission: options.adoptUnbound === true ? "adopt-unbound" : "owned",
+    });
+
+    const outcomes = await Promise.all(
+        targets.map((target) =>
+            deliverTo(target, route, payloadSnapshot, {
+                deadline,
+                expected,
+                operationBase,
+                forceLegacy: options.inspectUnbound === true,
+            }),
+        ),
+    );
+    const result = outcomes[0];
+    if (outcomes.length > 1) {
+        result.alsoShownIn = outcomes.slice(1).map(secondaryOutcome);
     }
 
     return result;
 }
 
 /** One request to one named window. */
-async function deliverTo(companion, route, payload, { contextPath, timeoutMs }) {
+async function deliverTo(
+    companion,
+    route,
+    payload,
+    { deadline, expected, operationBase, forceLegacy = false },
+) {
+    const guarded =
+        companionSupportsSessionOwnedOperations(companion) && !forceLegacy;
+    const deliveryMode = guarded ? "guarded" : "legacy-single-shot";
+    const targetMetadata = {
+        windowId: companion.windowId || null,
+        targetStartedAt: companion.startedAt || null,
+        deliveryMode,
+        operationId: guarded ? operationBase.id : null,
+    };
+
     // Checked before firing: an unreachable pairing would otherwise burn the
     // whole timeout and then report the wrong cause.
     const blocked = unreachable(companion);
-    if (blocked) return { ok: false, reason: "refused", error: blocked };
+    if (blocked) return { ok: false, reason: "refused", error: blocked, ...targetMetadata };
 
     const capability = companionSupportsRoute(companion, route);
     if (!capability.ok) {
@@ -474,66 +546,84 @@ async function deliverTo(companion, route, payload, { contextPath, timeoutMs }) 
             error: capability.error,
             missingCapability: capability.required,
             companionVersion: companion.version || null,
+            ...targetMetadata,
         };
     }
-
-    ensureDirs();
-    sweep();
-
-    const requestId = `${Date.now()}-${randomUUID().slice(0, 8)}`;
-    let spawnError = null;
-    let inboxFile = null;
-    if (WINDOW_ID.test(String(companion.windowId || ""))) {
-        const written = writeInbox(companion.windowId, {
-            requestId,
-            route,
-            payload,
-        });
-        spawnError = written.error;
-        inboxFile = written.file;
-    } else {
-        const exe = resolveCompanionExe(companion, contextPath);
-        if (!exe) {
-            return {
-                ok: false,
-                reason: "absent",
-                error: "could not find the editor executable to deliver the request to",
-            };
-        }
-        if (payload !== null) {
-            writeFileSync(join(REQ_DIR, `${requestId}.json`), JSON.stringify(payload), "utf8");
-        }
-        // Old companions have no addressed inbox. The selector permits this
-        // fallback only when that old window is unambiguous.
-        const scheme = companion.uriScheme || (/insiders/i.test(exe) ? "vscode-insiders" : "vscode");
-        const uri = `${scheme}://${EXTENSION_ID}/${route}?req=${requestId}`;
-        spawnError = fire(exe, uri);
-    }
-    if (spawnError) {
-        return { ok: false, reason: "error", error: `could not reach the editor: ${spawnError}` };
-    }
-
-    const ack = await waitForAck(requestId, timeoutMs);
-    if (!ack) {
-        rmSync(join(REQ_DIR, `${requestId}.json`), { force: true });
-        if (inboxFile) {
-            // The marker goes down BEFORE the request is removed, so there is
-            // never a moment where neither exists. Deleting alone cannot stop a
-            // request that has already been claimed: the claim is a rename, so
-            // the file being deleted is no longer the file the companion holds,
-            // and the route would run anyway - after the model had been told the
-            // window never answered, and had retried.
-            abandonInbox(companion.windowId, requestId);
-            rmSync(inboxFile, { force: true });
-        }
+    if (
+        Array.isArray(companion.capabilities) &&
+        !companion.capabilities.includes("transport:addressed-inbox")
+    ) {
         return {
             ok: false,
-            reason: "timeout",
-            error: `the companion did not answer within ${timeoutMs}ms`,
+            reason: "incompatible",
+            error:
+                "this operation requires companion capability 'transport:addressed-inbox'. " +
+                "Update the porthole companion and open a new VS Code window.",
+            missingCapability: "transport:addressed-inbox",
+            companionVersion: companion.version || null,
+            ...targetMetadata,
         };
     }
 
-    return ack.ok ? ack : { ...ack, reason: ack.reason || "refused" };
+    if (!WINDOW_ID.test(String(companion.windowId || ""))) {
+        return {
+            ok: false,
+            reason: "incompatible",
+            error:
+                "this companion cannot accept exact-window addressed delivery; update it and open a new VS Code window",
+            ...targetMetadata,
+        };
+    }
+
+    if (!guarded) {
+        return deliverLegacy(companion, route, payload, {
+            deadline,
+            targetMetadata,
+            legacyReason: forceLegacy ? "unbound-inspection" : null,
+        });
+    }
+    if (!expected.sessionId || !expected.sessionPath) {
+        return {
+            ok: false,
+            reason: "refused",
+            error: "guarded delivery requires the source Copilot session id and folder",
+            ...targetMetadata,
+        };
+    }
+    if (!Number.isFinite(Date.parse(companion.startedAt))) {
+        return {
+            ok: false,
+            reason: "incompatible",
+            error:
+                "the companion advertises guarded delivery without a valid host incarnation",
+            ...targetMetadata,
+        };
+    }
+
+    const operation = Object.freeze({
+        ...operationBase,
+        targetWindowId: companion.windowId,
+        targetStartedAt: companion.startedAt,
+    });
+    return deliverGuarded(companion, route, payload, {
+        deadline,
+        expected,
+        operation,
+        targetMetadata,
+    });
+}
+
+function secondaryOutcome(result) {
+    return {
+        windowId: result.windowId || null,
+        ok: Boolean(result.ok),
+        error: result.ok ? undefined : result.error,
+        reason: result.ok ? undefined : result.reason,
+        deliveryMode: result.deliveryMode,
+        operationId: result.operationId || null,
+        disposition: result.disposition,
+        mayHaveExecuted: result.mayHaveExecuted,
+    };
 }
 
 /**
@@ -564,7 +654,11 @@ function writeInbox(windowId, request) {
         mkdirSync(dir, { recursive: true, mode: 0o700 });
         const file = join(dir, `${request.requestId}.json`);
         const tmp = `${file}.tmp`;
-        writeFileSync(tmp, JSON.stringify(request), { encoding: "utf8", mode: 0o600 });
+        const raw = JSON.stringify(request);
+        if (Buffer.byteLength(raw, "utf8") > MAX_REQUEST_BYTES) {
+            return { error: "request exceeded the 6 MiB transport limit", file: null };
+        }
+        writeFileSync(tmp, raw, { encoding: "utf8", mode: 0o600 });
         renameSync(tmp, file);
         return { error: null, file };
     } catch (err) {
@@ -572,69 +666,217 @@ function writeInbox(windowId, request) {
     }
 }
 
-/**
- * The executable that will deliver the URI.
- *
- * `--open-url` must go to the executable: the bin/*.cmd shim blocks without
- * ever delivering the URI. It must also be the same build the companion is
- * running in, or an Insiders URI is handed to Stable and quietly goes nowhere.
- */
-function resolveCompanionExe(companion, contextPath) {
-    const wantsInsiders = companion.uriScheme === "vscode-insiders";
-
-    const target = resolveEditorTarget(contextPath);
-    if (target) {
-        const exe = resolveEditorExe(target.command);
-        if (exe && /insiders/i.test(exe) === wantsInsiders) return exe;
+async function deliverLegacy(
+    companion,
+    route,
+    payload,
+    { deadline, targetMetadata, legacyReason = null },
+) {
+    const requestId = newRequestId();
+    const written = writeInbox(companion.windowId, {
+        requestId,
+        route,
+        payload,
+        ...(legacyReason ? { legacyReason } : {}),
+    });
+    if (written.error) {
+        return {
+            ok: false,
+            reason: "error",
+            error: `could not reach the editor: ${written.error}`,
+            requestId,
+            operationId: null,
+            ...targetMetadata,
+        };
     }
-
-    // The chosen editor is the wrong build for this companion, so go looking
-    // for the right one.
-    const launcher = whichEditor(wantsInsiders ? "code-insiders" : "code");
-    if (launcher) {
-        const exe = resolveEditorExe(launcher);
-        if (exe) return exe;
-    }
-
-    return target ? resolveEditorExe(target.command) : null;
-}
-
-function fire(exe, uri) {
-    try {
-        const child = spawn(exe, ["--open-url", "--", uri], {
-            detached: true,
-            stdio: ["ignore", "ignore", "ignore"],
-            windowsHide: true,
+    const attempts = [{ requestId, file: written.file, settled: false }];
+    const outcome = await waitForAttemptOutcome({
+        attempts,
+        deadline,
+        validateAck: validateLegacyAck,
+    });
+    if (!outcome.ack) {
+        abandonAttempts(companion.windowId, attempts);
+        return unconfirmedResult({
+            attempts,
+            deadline,
+            operationId: null,
+            targetMetadata,
+            details: outcome.errors,
         });
-        child.on("error", () => {}); // reported through the ack timeout instead
-        child.unref();
-        return null;
-    } catch (err) {
-        return err.message;
+    }
+
+    abandonAttempts(companion.windowId, attempts, outcome.attempt.requestId);
+    const result = {
+        ...outcome.ack,
+        requestId: outcome.attempt.requestId,
+        operationId: null,
+        disposition: outcome.ack.disposition || "executed",
+        ...targetMetadata,
+    };
+    return result.ok ? result : { ...result, reason: result.reason || "refused" };
+}
+
+async function deliverGuarded(
+    companion,
+    route,
+    payload,
+    { deadline, expected, operation, targetMetadata },
+) {
+    const attempts = [];
+    const initial = publishGuardedAttempt(companion, route, payload, operation);
+    if (initial.error) {
+        return {
+            ok: false,
+            reason: "error",
+            error: `could not reach the editor: ${initial.error}`,
+            requestId: initial.requestId,
+            operationId: operation.id,
+            ...targetMetadata,
+        };
+    }
+    attempts.push(initial.attempt);
+
+    const outcome = await waitForAttemptOutcome({
+        attempts,
+        deadline,
+        retryOffsets: RETRY_OFFSETS_MS,
+        retry: () => {
+            const blocked = retryRefusal(companion, expected, operation.admission);
+            if (blocked) return { error: blocked };
+            const published = publishGuardedAttempt(companion, route, payload, operation);
+            if (published.error) return { error: published.error };
+            attempts.push(published.attempt);
+            return { attempt: published.attempt };
+        },
+        validateAck: (ack, attempt) => validateGuardedAck(ack, attempt, operation),
+    });
+
+    if (!outcome.ack) {
+        abandonAttempts(companion.windowId, attempts);
+        return unconfirmedResult({
+            attempts,
+            deadline,
+            operationId: operation.id,
+            targetMetadata,
+            details: outcome.errors,
+        });
+    }
+
+    abandonAttempts(companion.windowId, attempts, outcome.attempt.requestId);
+    return outcome.ack.ok
+        ? outcome.ack
+        : { ...outcome.ack, reason: outcome.ack.reason || "refused" };
+}
+
+function publishGuardedAttempt(companion, route, payload, operation) {
+    const requestId = newRequestId();
+    const written = writeInbox(companion.windowId, {
+        requestId,
+        operation,
+        route,
+        payload,
+    });
+    return written.error
+        ? { error: written.error, requestId }
+        : {
+              error: null,
+              requestId,
+              attempt: { requestId, file: written.file, settled: false },
+          };
+}
+
+function newRequestId() {
+    return `${Date.now()}-${randomUUID().slice(0, 8)}`;
+}
+
+function retryRefusal(companion, expected, admission) {
+    const current = findCompanions().find(
+        (candidate) => candidate.windowId === companion.windowId,
+    );
+    if (!current) return "the pinned companion host is no longer running";
+    if (current.startedAt !== companion.startedAt) {
+        return "the pinned companion host was replaced; the operation was not replayed";
+    }
+    if (!companionSupportsSessionOwnedOperations(current)) {
+        return "the pinned companion host no longer advertises guarded delivery";
+    }
+    const blocked = unreachable(current);
+    if (blocked) return blocked;
+
+    const ownership = classifyOwnership(current, expected);
+    const allowed =
+        ownership === "owned" ||
+        (admission === "adopt-unbound" && ownership === "unbound");
+    return allowed
+        ? null
+        : `the pinned target's session ownership changed to '${ownership}'`;
+}
+
+function validateLegacyAck(ack) {
+    if (!ack || typeof ack !== "object" || Array.isArray(ack)) {
+        return "the companion acknowledgement was not a JSON object";
+    }
+    if (typeof ack.ok !== "boolean") {
+        return "the companion acknowledgement did not contain an outcome";
+    }
+    return null;
+}
+
+function validateGuardedAck(ack, attempt, operation) {
+    const legacyError = validateLegacyAck(ack);
+    if (legacyError) return legacyError;
+    const expected = {
+        requestId: attempt.requestId,
+        operationId: operation.id,
+        windowId: operation.targetWindowId,
+        targetStartedAt: operation.targetStartedAt,
+        deliveryMode: "guarded",
+    };
+    for (const [key, value] of Object.entries(expected)) {
+        if (ack[key] !== value) {
+            return `guarded acknowledgement ${key} did not match the pinned operation`;
+        }
+    }
+    if (!["executed", "joined", "replayed", "rejected"].includes(ack.disposition)) {
+        return "guarded acknowledgement disposition was missing or invalid";
+    }
+    return null;
+}
+
+function takeAck(attempt) {
+    const file = join(ACK_DIR, `${attempt.requestId}.json`);
+    if (!existsSync(file)) return { found: false };
+    try {
+        const ack = JSON.parse(readFileSync(file, "utf8"));
+        rmSync(file, { force: true });
+        return { found: true, ack };
+    } catch {
+        return { found: false };
     }
 }
 
-/**
- * Waits for the companion's reply.
- *
- * Watched *and* polled. The watcher is what makes a reply feel immediate:
- * polling alone cannot beat the host timer granularity, which on Windows
- * rounds any sleep up to roughly 15ms and so put a floor under every route.
- * The poll stays because fs.watch is not reliable everywhere - network and
- * virtualised filesystems drop events - and a missed event must degrade to a
- * slower answer, never a lost one.
- */
-async function waitForAck(requestId, timeoutMs) {
-    const name = `${requestId}.json`;
-    const file = join(ACK_DIR, name);
-    let deadline = Date.now() + timeoutMs;
-
+async function waitForAttemptOutcome({
+    attempts,
+    deadline,
+    retryOffsets = [],
+    retry = null,
+    validateAck,
+}) {
+    const errors = [];
+    const startedAt = deadline.activeElapsed();
+    let retryIndex = 0;
     let wake = null;
     let watcher = null;
     try {
         watcher = watch(ACK_DIR, { persistent: false }, (_event, changed) => {
             // Some platforms report no filename; waking for those is cheap.
-            if (!changed || String(changed).startsWith(requestId)) wake?.();
+            if (
+                !changed ||
+                attempts.some((attempt) => String(changed).startsWith(attempt.requestId))
+            ) {
+                wake?.();
+            }
         });
         if (typeof watcher.on === "function") watcher.on("error", () => {});
     } catch {
@@ -644,39 +886,41 @@ async function waitForAck(requestId, timeoutMs) {
     try {
         let interval = POLL_MIN_MS;
         for (;;) {
-            // Checked before the first sleep, which closes the race where the
-            // reply lands between firing the request and watching for it.
-            if (existsSync(file)) {
-                try {
-                    const parsed = JSON.parse(readFileSync(file, "utf8"));
-                    rmSync(file, { force: true });
-                    return parsed;
-                } catch {
-                    // Half-written despite the atomic rename; the rest of it is
-                    // milliseconds away, so do not back off for it.
-                    interval = POLL_MIN_MS;
-                }
+            for (const attempt of attempts) {
+                if (attempt.settled) continue;
+                const found = takeAck(attempt);
+                if (!found.found) continue;
+                attempt.settled = true;
+                const invalid = validateAck(found.ack, attempt);
+                if (!invalid) return { ack: found.ack, attempt, errors };
+                errors.push(invalid);
+                interval = POLL_MIN_MS;
             }
 
-            const remaining = deadline - Date.now();
-            if (remaining <= 0) return null;
+            const elapsed = deadline.activeElapsed() - startedAt;
+            while (
+                retry &&
+                retryIndex < retryOffsets.length &&
+                elapsed >= retryOffsets[retryIndex] &&
+                deadline.remaining() > 0
+            ) {
+                const retried = retry();
+                if (retried.error) errors.push(retried.error);
+                retryIndex += 1;
+            }
 
-            const nap = Math.min(interval, remaining);
-            const before = Date.now();
-            await napUntilWoken(nap, (resume) => {
+            const remaining = deadline.remaining();
+            if (remaining <= 0) return { ack: null, attempt: null, errors };
+
+            const nextRetry =
+                retry && retryIndex < retryOffsets.length
+                    ? Math.max(0, retryOffsets[retryIndex] - elapsed)
+                    : Number.POSITIVE_INFINITY;
+            const nap = Math.min(interval, nextRetry, remaining);
+            await deadline.sleep(nap, (resume) => {
                 wake = resume;
             });
             wake = null;
-
-            // Time the machine spent suspended is not time the companion had to
-            // answer in. A preview waits half an hour for a human to click
-            // Apply; closing the lid in the middle used to burn that whole
-            // budget at once, so the CLI reported a timeout while the editor was
-            // still showing the diff - and then Apply wrote files that the model
-            // had already been told were never applied.
-            const slept = Date.now() - before;
-            if (slept > nap + SUSPEND_THRESHOLD_MS) deadline += slept - nap;
-
             interval = Math.min(interval * POLL_GROWTH, POLL_MAX_MS);
         }
     } finally {
@@ -687,6 +931,96 @@ async function waitForAck(requestId, timeoutMs) {
             // Already closed.
         }
     }
+}
+
+function abandonAttempts(windowId, attempts, winnerRequestId = null) {
+    for (const attempt of attempts) {
+        if (attempt.requestId === winnerRequestId || attempt.settled) continue;
+        abandonInbox(windowId, attempt.requestId);
+        if (attempt.file) rmSync(attempt.file, { force: true });
+    }
+}
+
+function unconfirmedResult({
+    attempts,
+    deadline,
+    operationId,
+    targetMetadata,
+    details = [],
+}) {
+    const detail = details.length ? ` Last transport detail: ${details[details.length - 1]}.` : "";
+    return {
+        ok: false,
+        reason: "unconfirmed",
+        error:
+            `the companion did not confirm the operation within ${deadline.budgetMs}ms.` +
+            detail,
+        mayHaveExecuted: attempts.length > 0,
+        requestId: attempts[attempts.length - 1]?.requestId || null,
+        operationId,
+        attempts: attempts.length,
+        disposition: null,
+        ...targetMetadata,
+    };
+}
+
+function createSharedDeadline(budgetMs) {
+    const startedAt = performance.now();
+    const suspensions = [];
+    let activeFloor = 0;
+
+    function addSuspension(start, end) {
+        if (end <= start) return;
+        let left = start;
+        let right = end;
+        const merged = [];
+        let inserted = false;
+        for (const interval of suspensions) {
+            if (interval.end < left) {
+                merged.push(interval);
+            } else if (right < interval.start) {
+                if (!inserted) {
+                    merged.push({ start: left, end: right });
+                    inserted = true;
+                }
+                merged.push(interval);
+            } else {
+                left = Math.min(left, interval.start);
+                right = Math.max(right, interval.end);
+            }
+        }
+        if (!inserted) merged.push({ start: left, end: right });
+        suspensions.splice(0, suspensions.length, ...merged);
+    }
+
+    function activeElapsed() {
+        const now = performance.now();
+        let suspended = 0;
+        for (const interval of suspensions) {
+            const end = Math.min(interval.end, now);
+            if (end > interval.start) suspended += end - interval.start;
+        }
+        const observed = Math.max(0, now - startedAt - suspended);
+        activeFloor = Math.max(activeFloor, observed);
+        return activeFloor;
+    }
+
+    async function sleep(ms, register) {
+        const scheduled = Math.max(0, ms);
+        const before = performance.now();
+        await napUntilWoken(scheduled, register);
+        const after = performance.now();
+        if (after - before > scheduled + SUSPEND_THRESHOLD_MS) {
+            addSuspension(before + scheduled, after);
+        }
+    }
+
+    return {
+        budgetMs,
+        activeElapsed,
+        remaining: () => Math.max(0, budgetMs - activeElapsed()),
+        sleep,
+    };
 }
 
 /** Sleeps for `ms`, or until `register`'s callback is invoked, whichever is first. */
@@ -734,6 +1068,12 @@ export function explain(result) {
         return (
             `${result.error}. Either the window is busy, or that record is left over from ` +
             "a window that no longer exists - in which case the editor is starting now. Try again."
+        );
+    }
+    if (result.reason === "unconfirmed") {
+        return (
+            `${result.error}. The action may already have executed; confirm its outcome before ` +
+            "issuing it as a new operation."
         );
     }
     return result.error || "the companion refused the request";

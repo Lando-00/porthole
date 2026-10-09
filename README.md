@@ -97,7 +97,7 @@ without you typing anything.
 | `porthole_tour_cleanup_legacy` | Confirms and deletes one provable legacy copy |
 | `porthole_tour_manage` | Switches, closes or deletes a walkthrough by id |
 | `porthole_problems` | Reads your Problems panel, so it stops guessing at compile errors |
-| `porthole_changes` | Turns a diff into candidate walkthrough steps, so a review never misses a file |
+| `porthole_changes` | Lists changed files and provides candidate evidence; large changes return an inventory |
 | `porthole_review` | Saves, lists, loads or deletes this session's findings |
 | `porthole_review_discover` | Searches read-only Saved Reviews from other sessions |
 | `porthole_review_import` | Copies a discovered review into this session with provenance |
@@ -139,10 +139,16 @@ once, with one active**.
 
 Ask for a walkthrough of a change — *"walk me through this PR"*, *"walk me
 through what you just did"* — and porthole reads the diff first, so Copilot
-starts from the changed hunks instead of going looking for them. Every changed
-file is either explained or deliberately left out, and it will tell you how many
-it left out. A pull request has to be checked out first: line numbers from a
-branch you do not have would point the walkthrough at the wrong code.
+starts from a file inventory instead of guessing what changed. Small changes
+include candidate locations; large ones list files and added/removed counts for
+Copilot to investigate directly. Index and historical line numbers belong to
+that comparison, so Copilot reads current saved files before choosing Tour
+locations. An incomplete inventory or unavailable count is reported explicitly.
+
+Tours display in the primary window by default. An explicit `windowId` can
+target another window owned by this session; follow-up listing and navigation
+must name that target again. Publishing a Tour does not move every session
+window to the same code. The saved Tour still belongs to the session.
 
 - The **active** tour owns the gutter, the CodeLenses and the status bar. You
   can only follow one path with your eyes at a time.
@@ -156,6 +162,13 @@ branch you do not have would point the walkthrough at the wrong code.
 Tours are saved into their owning session folder automatically, so closing the
 window or restarting and resuming that same Copilot session does not lose them.
 A fork starts with an empty Tour Library.
+
+Publication captures the original source evidence once. Cursor autosaves use a
+small progress record instead of rewriting the authored Tour. Navigation in an
+older window therefore cannot overwrite a refreshed explanation.
+
+A new step is not displayed against an unsaved editor buffer: save the affected
+file, then retry navigation. Porthole never saves or discards those edits for you.
 
 Only tours created by the session bound to a window are restored automatically.
 Ordinary listing, activation and deletion never scan another session's Tour
@@ -177,6 +190,11 @@ The useful consequence: a tour **heals from movement but not from rewriting**.
 Add a function above a step and the walkthrough catches up silently. Rewrite
 what the step was describing and it stays flagged until someone rebuilds it —
 because code moving does not invalidate an explanation, and code changing might.
+
+On list/reopen, a separate advisory reports when the local repository revision
+differs from the publication's revision. It is not a push detector or proof that
+the explanation is wrong. There is no continuous freshness monitor or automatic
+narration update; the user and model decide when to refresh a Tour.
 
 ### plan.md opens itself
 
@@ -374,7 +392,8 @@ cd vscode-extension
 npm run install-local     # packages the VSIX and installs it into Insiders
 ```
 
-New builds are picked up by **new windows**; reload an existing one.
+Existing windows can keep an older running companion after an installation.
+Start an updated window when ready; the delivery result identifies legacy mode.
 
 ### How they talk
 
@@ -406,6 +425,17 @@ inbox. Manual and old-client URI requests remain supported, but normal tool
 traffic uses the addressed inbox because a VS Code URI can select an editor
 build, not a particular window within that build.
 
+Updated pairs validate expected session ownership again before admitting work.
+Bounded retries reuse one operation ID in the same live companion; a duplicate
+joins pending work or receives its retained result rather than repeating the
+effect. Visual broadcasts run concurrently under one shared deadline, with the
+primary's outcome authoritative and secondary outcomes reported.
+
+Older pairs remain usable as **legacy single-shot delivery**, explicitly labelled
+without the new receiver-side ownership or retry guarantees. A missing receipt
+is **unconfirmed**, not proof that nothing happened. A replacement host or new
+tool call is outside the original operation's deduplication window.
+
 The return path lives under `~/.copilot` rather than the temp directory
 on purpose. `/tmp` is shared between local users on Linux and macOS, and this is
 the one channel that turns a file into a prompt for an agent that can run shell
@@ -425,8 +455,9 @@ Two details worth knowing, both found the hard way:
   alone did not reliably wake it, so the handler would not be registered when
   the URI arrived.
 
-Without the companion nothing breaks: ranges degrade to a plain jump, and
-porthole says so rather than pretending.
+Session-bound navigation fails clearly when its window is unavailable. It does
+not fall back to an arbitrary last-used editor window. Standalone editor scripts
+remain available for deliberate direct-editor use.
 
 ## Diagrams
 

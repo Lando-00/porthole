@@ -2,6 +2,10 @@
 
 Supersedes [0001](0001-session-owned-windows-fail-closed.md).
 
+Tour presentation and explicit-target precedence are amended by
+[0003](0003-owned-targets-and-tour-publications.md). The remainder of this
+document records the original multi-window decision.
+
 Ownership is defined by the artifact, not by a count: **whatever Copilot session
 folder is open in a window, that session owns that window.** A session may own
 more than one, and asking for another window is a legitimate thing to do rather

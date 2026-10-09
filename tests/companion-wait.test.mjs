@@ -118,6 +118,7 @@ test("a reply is delivered through the addressed inbox", async () => {
         const result = await callCompanion("reveal", { file: "x" }, { ...options, timeoutMs: 4000 });
         assert.equal(result.ok, true);
         assert.equal(result.applied, 1);
+        assert.equal(result.deliveryMode, "legacy-single-shot");
     } finally {
         stop();
     }
@@ -137,13 +138,14 @@ test("an ack already on disk is reported, not called a timeout", async () => {
     }
 });
 
-test("silence is reported as a timeout, within its budget", async () => {
+test("silence is reported as unconfirmed within its budget", async () => {
     const started = Date.now();
     const result = await callCompanion("reveal", { file: "x" }, { ...options, timeoutMs: 300 });
     const elapsed = Date.now() - started;
 
     assert.equal(result.ok, false);
-    assert.equal(result.reason, "timeout");
+    assert.equal(result.reason, "unconfirmed");
+    assert.equal(result.mayHaveExecuted, true);
     assert.ok(elapsed >= 300, `waited ${elapsed}ms, which is less than the 300ms budget`);
     assert.ok(elapsed < 3000, `waited ${elapsed}ms, far beyond the 300ms budget`);
 
@@ -159,7 +161,7 @@ test("a zero timeout still checks once and does not hang", async () => {
     const started = Date.now();
     const result = await callCompanion("reveal", { file: "x" }, { ...options, timeoutMs: 0 });
     assert.equal(result.ok, false);
-    assert.equal(result.reason, "timeout");
+    assert.equal(result.reason, "unconfirmed");
     assert.ok(Date.now() - started < 2000, "a zero timeout must return promptly");
 });
 

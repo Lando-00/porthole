@@ -77,9 +77,22 @@ automatically and restored when the window reopens — and, because line numbers
 rot, each step carries a hash of the code it was written about, so a tour that
 has gone out of date says so instead of describing whatever now sits there.
 
+Tour presentation targets the primary window by default or one explicitly
+selected window owned by the same session. Other windows are not automatically
+navigated when a Tour is published or activated. Saved Tours remain session-owned.
+
+Original source anchors are captured at publication and retained. Cursor
+autosaves write a small progress record instead of rewriting the explanation.
+Before displaying a step, Porthole requires its target file to be saved; it
+never saves or discards editor changes automatically.
+
+Listing or reopening a Tour can show an advisory that the local repository
+revision changed since publication. This is an on-demand hint, not a continuous
+monitor, push detector, or guarantee that the narration is right or wrong.
+
 Startup restoration uses only the exact session folder present in this
-workspace. Tours loaded deliberately from older sessions keep their original
-storage file; moving through one does not adopt it into the current session.
+workspace. Historical Tours are discovered explicitly and imported as independent
+session-owned copies with provenance; navigation never mutates the source.
 
 **Saved reviews.** Save the current findings and load them again later, even
 from a different session. Findings carry a hash of the code they describe, so a
@@ -169,6 +182,16 @@ the URI scheme, protocol level and named capabilities. The PID proves liveness;
 `windowId` is the address. Compatibility is checked per operation, so
 independently released plugin and companion versions may work together without
 having equal product versions.
+
+When both halves support guarded operations, the companion validates the expected
+session at admission and deduplicates bounded retries using a stable operation
+ID. Lost acknowledgements can be replayed without running the action again.
+Visual broadcasts share a deadline instead of accumulating per-window waits.
+
+Older callers and companions still use explicitly labelled legacy single-shot
+delivery. They do not gain the new receiver-side ownership or deduplication
+guarantees merely by remaining compatible. Unconfirmed delivery may have executed;
+restarting a host does not authorize an automatic replay.
 
 Two Windows details worth knowing, both learned the hard way:
 
@@ -344,10 +367,12 @@ is not in memory. Acks the tour plus a `staleness` tally when it came off disk.
 disk. `tour-exit` — with an optional `{ tourId }` — only stops walking it;
 closing is not deleting.
 
-Tours are written to `<sessionDir>/porthole/tours/<tourId>.json` automatically,
-debounced, on creation and on every cursor move. Each step stores a hash of the
-code it describes, so loading can report it as `resolved`, `shifted` (found
-nearby and re-pointed), `changed` or `missing`.
+Authored Tours are written to `<sessionDir>/porthole/tours/<tourId>.json` on
+publication or explicit replacement. Debounced cursor saves use a separate
+`<sessionDir>/porthole/tour-progress/<tourId>.json` record, keyed by publication.
+Each step retains its original source hash, so reopening can report matching
+text as `resolved`, `shifted` (found nearby), `changed` or `missing`. These states
+describe source evidence, not the correctness of the explanation.
 
 ### `review-save` / `review-list` / `review-load`
 

@@ -4,7 +4,10 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 
-const { createSessionBinding } = require("../vscode-extension/src/binding");
+const {
+    createSessionBinding,
+    inspectWorkspaceOwnership,
+} = require("../vscode-extension/src/binding");
 
 function fixture(answer = "Clear binding", whileConfirming = () => {}) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-binding-test-"));
@@ -150,4 +153,53 @@ test("Clear Session Binding re-resolves the exact folder after confirmation", as
     } finally {
         fs.rmSync(setup.root, { recursive: true, force: true });
     }
+});
+
+test("receiver ownership inspection distinguishes owned, unbound, foreign, and conflicted windows", () => {
+    const sessionA = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const sessionB = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    const folderA = `C:\\Users\\test\\.copilot\\session-state\\${sessionA}`;
+    const folderB = `C:\\Users\\test\\.copilot\\session-state\\${sessionB}`;
+    const expected = { sessionId: sessionA, sessionFolder: folderA };
+    const vscode = (folders) => ({
+        workspace: {
+            workspaceFolders: folders.map((fsPath) => ({ uri: { fsPath } })),
+        },
+    });
+
+    assert.equal(
+        inspectWorkspaceOwnership(vscode(["C:\\repo", folderA]), expected).state,
+        "owned",
+    );
+    assert.equal(
+        inspectWorkspaceOwnership(vscode(["C:\\repo"]), expected).state,
+        "unbound",
+    );
+    assert.equal(
+        inspectWorkspaceOwnership(vscode(["C:\\repo", folderB]), expected).state,
+        "foreign",
+    );
+    assert.equal(
+        inspectWorkspaceOwnership(vscode([folderA, folderB]), expected).state,
+        "conflicted",
+    );
+});
+
+test("receiver ownership inspection rejects malformed expected identity", () => {
+    const session = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    const folder = `C:\\Users\\test\\.copilot\\session-state\\${session}`;
+    const vscode = {
+        workspace: {
+            workspaceFolders: [{ uri: { fsPath: folder } }],
+        },
+    };
+
+    assert.equal(
+        inspectWorkspaceOwnership(vscode, {
+            sessionId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            sessionFolder: folder,
+        }).state,
+        "conflicted",
+    );
+    assert.equal(inspectWorkspaceOwnership(vscode, {}).state, "unknown");
 });

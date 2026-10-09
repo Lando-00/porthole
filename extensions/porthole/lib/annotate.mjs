@@ -16,6 +16,7 @@ import { config } from "./config.mjs";
 import { projectRoot } from "./git.mjs";
 import { launchEditor, resolveEditorTarget } from "./editor.mjs";
 import { companionOptions } from "./target.mjs";
+import { withDeliveryNotes } from "./delivery-notes.mjs";
 
 const SEVERITIES = ["info", "warn", "error", "note"];
 
@@ -38,8 +39,9 @@ function normaliseSeverity(value) {
     return SEVERITIES.includes(severity) ? severity : "info";
 }
 
-function canUseUntargetedFallback(result) {
+function canUseUntargetedFallback(result, sessionSource) {
     return (
+        !sessionSource &&
         result.reason === "absent" &&
         (!Array.isArray(result.candidates) || result.candidates.length === 0)
     );
@@ -91,13 +93,13 @@ export async function annotate(
         companionOptions(dirname(entries[0].file), sessionSource),
     );
 
-    if (!result.ok) return `porthole: could not annotate - ${explain(result)}`;
+    if (!result.ok) return withDeliveryNotes(result, `porthole: could not annotate - ${explain(result)}`);
 
     const where = entries
         .map((e) => `${short(e.file, cwd)}:${e.startLine}${e.endLine !== e.startLine ? `-${e.endLine}` : ""}`)
         .join(", ");
 
-    return (
+    return withDeliveryNotes(result,
         `porthole: annotated ${result.applied} range(s) in VS Code (${where}).` +
         (missing.length ? ` Skipped missing file(s): ${missing.join(", ")}.` : "")
     );
@@ -109,9 +111,9 @@ export async function clearAnnotations(sessionSource = null) {
         null,
         companionOptions(process.cwd(), sessionSource),
     );
-    return result.ok
+    return withDeliveryNotes(result, result.ok
         ? "porthole: cleared all annotations."
-        : `porthole: could not clear annotations - ${explain(result)}`;
+        : `porthole: could not clear annotations - ${explain(result)}`);
 }
 
 /** Parses "file:10-20", "file:10:3", "file:10" or a bare symbol name. */
@@ -188,11 +190,11 @@ export async function goto(session, raw, message, cwd = process.cwd()) {
             companionOptions(dirname(file), session),
         );
         if (result.ok) {
-            return `porthole: highlighted ${short(file, cwd)} lines ${result.startLine}-${result.endLine}.`;
+            return withDeliveryNotes(result, `porthole: highlighted ${short(file, cwd)} lines ${result.startLine}-${result.endLine}.`);
         }
 
-        if (!canUseUntargetedFallback(result)) {
-            return `porthole: could not open the requested session window.\n  ${explain(result)}`;
+        if (!canUseUntargetedFallback(result, session)) {
+            return withDeliveryNotes(result, `porthole: could not open the requested session window.\n  ${explain(result)}`);
         }
         openAtLine(session, file, target.startLine, cwd);
         return (
@@ -215,13 +217,13 @@ export async function goto(session, raw, message, cwd = process.cwd()) {
         companionOptions(dirname(file), session),
     );
     if (revealed.ok) {
-        return `porthole: opened ${short(file, cwd)}${position}.`;
+        return withDeliveryNotes(revealed, `porthole: opened ${short(file, cwd)}${position}.`);
     }
-    if (!canUseUntargetedFallback(revealed)) {
-        return `porthole: could not open the requested session window.\n  ${explain(revealed)}`;
+    if (!canUseUntargetedFallback(revealed, session)) {
+        return withDeliveryNotes(revealed, `porthole: could not open the requested session window.\n  ${explain(revealed)}`);
     }
     openAtLine(session, file, target.kind === "point" ? target.startLine : null, cwd, position);
-    return (
+    return withDeliveryNotes(result,
         `porthole: opened ${short(file, cwd)}${position}, but could not confirm the target window.\n` +
         `  ${explain(revealed)}`
     );
@@ -244,18 +246,22 @@ async function gotoSymbol(session, query, message, cwd) {
         );
     }
 
-    if (Array.isArray(result.candidates) && result.candidates.length > 0) {
+    if (
+        Array.isArray(result.candidates) &&
+        result.candidates.length > 0 &&
+        result.candidates.every((candidate) => typeof candidate.file === "string" && Number.isInteger(candidate.startLine))
+    ) {
         const list = result.candidates
             .map((c) => `  ${short(c.file, cwd)}:${c.startLine}  ${c.kind} ${c.name}`)
             .join("\n");
-        return `porthole: '${query}' is ambiguous. Pick one:\n${list}`;
+        return withDeliveryNotes(result, `porthole: '${query}' is ambiguous. Pick one:\n${list}`);
     }
 
     if (result.reason === "absent" && config().goto.symbolFallback) {
-        return `porthole: could not look up '${query}' - ${explain(result)}`;
+        return withDeliveryNotes(result, `porthole: could not look up '${query}' - ${explain(result)}`);
     }
 
-    return `porthole: could not resolve '${query}' - ${result.error || explain(result)}`;
+    return withDeliveryNotes(result, `porthole: could not resolve '${query}' - ${result.error || explain(result)}`);
 }
 
 function openAtLine(session, file, line, cwd, position) {

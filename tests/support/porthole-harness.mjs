@@ -8,6 +8,8 @@ import transport from "../../vscode-extension/src/transport.js";
 import workspace from "../../vscode-extension/src/workspace.js";
 import dispatcher from "../../vscode-extension/src/dispatcher.js";
 import companionCapabilities from "../../vscode-extension/src/capabilities.js";
+import binding from "../../vscode-extension/src/binding.js";
+import operations from "../../vscode-extension/src/operations.js";
 
 const SESSION_ID = /^[a-f0-9-]{36}$/;
 const WINDOW_ID = /^[a-f0-9]{16}$/;
@@ -108,6 +110,8 @@ export async function createPortholeHarness() {
         connectionHealth = session ? "connected" : "unbound",
         compatibility = null,
         presenceOverrides = {},
+        ackWriter = null,
+        operationOptions = {},
     }) {
         if (!WINDOW_ID.test(String(windowId))) throw new TypeError("invalid Porthole window id");
         if (windows.has(windowId)) throw new Error(`Porthole window '${windowId}' already exists`);
@@ -118,6 +122,8 @@ export async function createPortholeHarness() {
         }
 
         const requests = [];
+        const startedRequests = [];
+        const acknowledgements = [];
         const extraRoutes = typeof routes === "function" ? routes(host.vscode) : routes;
         const handlers = {
             focus: () => focus.focus(host.vscode),
@@ -129,22 +135,50 @@ export async function createPortholeHarness() {
             capabilities === undefined
                 ? [
                       "transport:addressed-inbox",
+                      companionCapabilities.SESSION_OWNED_OPERATIONS,
                       ...Object.keys(handlers).map(companionCapabilities.routeCapability),
                   ]
                 : capabilities;
+        const startedAt =
+            presenceOverrides.startedAt || new Date().toISOString();
         const executeRequest = dispatcher.createDispatcher({
             knownRoutes: new Set(Object.keys(handlers)),
             optionalPayloadRoutes: new Set(["focus", "ping"]),
-            dispatch: async (route, payload) => handlers[route](payload),
-            writeAck: transport.writeAck,
+            dispatch: async (route, payload) => {
+                startedRequests.push({ route, payload, at: Date.now() });
+                return handlers[route](payload);
+            },
             warn: (message) => host.presentation.warnings.push(message),
             onHandled: (result, metadata) => {
                 requests.push({ ...metadata, result });
             },
         });
-        const subscription = inbox.start(windowId, (request) =>
-            executeRequest(request.route, request.payload, request.requestId, "inbox"),
-        );
+        const handleRequest = (request) =>
+            executeRequest(request.route, request.payload, request.requestId, "inbox");
+        const operationHost = operations.createOperationHost({
+            windowId,
+            startedAt,
+            inspectOwnership: (expected) =>
+                binding.inspectWorkspaceOwnership(host.vscode, expected),
+            execute: handleRequest,
+            ...operationOptions,
+        });
+        const writeAck = (requestId, body) => {
+            acknowledgements.push({ requestId, body });
+            if (typeof ackWriter === "function") {
+                return ackWriter({
+                    requestId,
+                    body,
+                    write: transport.writeAck,
+                });
+            }
+            return transport.writeAck(requestId, body);
+        };
+        const subscription = inbox.start(windowId, handleRequest, {
+            startedAt,
+            operationHost,
+            writeAck,
+        });
         subscriptions.push(subscription);
 
         const presenceDir = join(home, "porthole");
@@ -169,11 +203,13 @@ export async function createPortholeHarness() {
             sessionId: session?.id || null,
             sessionFolder: session?.dir || null,
             workspaceFolders: host.folders.map((folder) => folder.uri.fsPath),
+            startedAt,
             updatedAt: new Date().toISOString(),
             ...presenceOverrides,
         };
+        const presenceFile = join(presenceDir, `companion-harness-${windowId}.json`);
         writeFileSync(
-            join(presenceDir, `companion-harness-${windowId}.json`),
+            presenceFile,
             JSON.stringify(presence),
             "utf8",
         );
@@ -182,7 +218,11 @@ export async function createPortholeHarness() {
             windowId,
             session,
             presence,
+            presenceFile,
             requests,
+            startedRequests,
+            acknowledgements,
+            operationHost,
             presentation: host.presentation,
             vscode: host.vscode,
         };
