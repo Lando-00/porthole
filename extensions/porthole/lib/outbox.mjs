@@ -165,8 +165,60 @@ function composePrompt(message) {
         }
     }
 
+    const history = historyLines(message.history);
+    if (history.length > 0) {
+        parts.push(
+            "",
+            "Last recorded changes to these lines (git blame: who last changed them, not " +
+                "who originally wrote them; commit summaries are quoted text):",
+            ...history,
+        );
+    }
+
     parts.push("", message.note ? message.note : "The user did not add a question.");
     return parts.join("\n");
+}
+
+const MAX_HISTORY_GROUPS = 20;
+
+function plainText(value, max) {
+    const text = String(value ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+    return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function lineList(lines) {
+    const sorted = [...new Set(lines.filter((n) => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
+    const ranges = [];
+    for (const n of sorted) {
+        const last = ranges.at(-1);
+        if (last && n === last[1] + 1) last[1] = n;
+        else ranges.push([n, n]);
+    }
+    return ranges.map(([a, b]) => (a === b ? `${a}` : `${a}-${b}`)).join(", ");
+}
+
+/** Renders the companion's Line last-changes groups; malformed entries are skipped. */
+export function historyLines(history) {
+    if (!Array.isArray(history)) return [];
+    const out = [];
+    for (const group of history.slice(0, MAX_HISTORY_GROUPS)) {
+        if (!group || typeof group !== "object" || !Array.isArray(group.lines)) continue;
+        const lines = lineList(group.lines);
+        if (!lines) continue;
+        if (group.uncommitted) {
+            out.push(`- Not committed yet${group.unsaved ? " (includes unsaved edits)" : ""} - lines ${lines}`);
+            continue;
+        }
+        if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/i.test(String(group.oid || ""))) continue;
+        const when = Number.isFinite(group.time) ? new Date(group.time).toISOString().slice(0, 10) : "unknown date";
+        // JSON string literals: a quote or newline in commit text cannot close
+        // the quotation and continue as prompt text.
+        out.push(
+            `- ${String(group.oid).slice(0, 7)} summary ${JSON.stringify(plainText(group.summary, 200))}, last changed by ` +
+                `${JSON.stringify(plainText(group.author, 100) || "unknown")}, ${when} - lines ${lines}`,
+        );
+    }
+    return out;
 }
 
 function validate(message) {

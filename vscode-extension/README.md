@@ -90,6 +90,19 @@ Listing or reopening a Tour can show an advisory that the local repository
 revision changed since publication. This is an on-demand hint, not a continuous
 monitor, push detector, or guarantee that the narration is right or wrong.
 
+**Step diffs.** A Tour that explains a change records the comparison it
+explains. **Diff** above the current step opens the native diff editor beside
+the walkthrough — base on the left, your saved file on the right, step selected
+— without moving the Tour. Old revisions are read with `git show`; nothing is
+fetched or checked out. While that Tour is active, **change markers** (thin
+line borders and overview-ruler marks) show what the comparison added, modified
+or removed; they hide while a file has unsaved edits.
+
+**Line last-changes.** Right-click → **porthole: Who last changed these lines?**
+groups the selection by the commits that last changed it, with Compare, Copy
+commit ID and Open commit. Uncommitted and unsaved lines are labelled, never
+attributed.
+
 Startup restoration uses only the exact session folder present in this
 workspace. Historical Tours are discovered explicitly and imported as independent
 session-owned copies with provenance; navigation never mutates the source.
@@ -100,7 +113,8 @@ review that has gone stale says so instead of marking innocent lines.
 
 **Send to Copilot.** `Ctrl+Alt+.` sends the selection, its location, any
 diagnostics on those lines and an optional question back into the running CLI
-session as a prompt.
+session as a prompt. **Send selection with history** also attaches the lines'
+last changes.
 
 **Range selection.** A real multi-line selection, not just a cursor.
 
@@ -338,6 +352,19 @@ to a workspace folder, and must exist — a step that cannot be resolved is
 reported in `result.skipped`, never silently dropped. Acks
 `{ ok, result: { tourId, replaced, steps, active, library, skipped } }`.
 
+An optional `comparison` (`{ kind, label, base, target, renames,
+renamesComplete }`, resolved by the CLI) becomes the Tour's Recorded comparison,
+stored in its publication; the ack then includes `comparisonRecorded: true`. A
+malformed comparison refuses the whole publication.
+
+### `tour-diff`
+
+`{ tourId, step, side }` opens the Step diff for one step (0-based, default the
+current step) of a Tour loaded in this window: base on the left, the saved file
+— or the recorded target for `side: "target"` — on the right. It never moves
+the Tour. Acks `{ tourId, step, side, title, savedDiffersFromTarget,
+noChangesInRange, notes }`.
+
 ### `tour-list` / `tour-activate` / `tour-delete`
 
 `tour-list` takes `{ includeSteps, repo, limit }` and merges what is loaded with
@@ -406,6 +433,11 @@ session's reviews folder or it is refused.
 | `porthole: Close all tours` | Unloads the library; leaves the files alone |
 | `porthole: Save review` / `Load review` | Persist and restore findings |
 | `porthole: Send selection to Copilot` | `Ctrl+Alt+.`, also on the editor context menu |
+| `porthole: Send selection with history to Copilot` | Also attaches the lines' last changes; editor context menu |
+| `porthole: Who last changed these lines?` | Editor context menu, and on a tour step in the sidebar |
+| `porthole: Open Step diff` | The `Diff` lens above the current step; also inline on a step in the sidebar |
+| `porthole: Open Step diff against the recorded revisions` | Base vs the recorded target, instead of your saved file |
+| `porthole: Toggle change markers` | Per window, while a compared tour is active |
 | `porthole: Clear highlight` | Removes the reveal flash |
 | `porthole: Refresh session and tasks` | Reloads the sidebar |
 | `porthole: Show reveal URI for the current selection` | Copies a reveal URI to the clipboard |
@@ -422,6 +454,7 @@ The three tour keybindings only bind while a tour is running.
 | `porthole.annotations.autoRevealFocus` | `true` | Scroll to the focused annotation on arrival |
 | `porthole.gettingStarted.show` | `true` | Open the getting-started walkthrough the first time this extension runs. It is shown once either way |
 | `porthole.problems.publish` | `true` | Show annotations and tour steps in the Problems panel. Each is marked on its **first line only**; turn this off for no underline at all |
+| `porthole.tour.changeMarkers` | `true` | Mark the lines a compared tour's change touched, while that tour is active |
 | `porthole.diagnostics` | `false` | Log to `<tmp>/porthole-companion.log` |
 
 Turn on `porthole.diagnostics` when a porthole command appears to do nothing; it

@@ -38,6 +38,8 @@ const { findWorkspaceSession } = require("./session");
 const MAX_STEPS = 50;
 const MAX_NARRATION = 2000;
 const LENS_TITLE_MAX = 90;
+const OID_PATTERN = /^[0-9a-f]{40}([0-9a-f]{24})?$/;
+const CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/;
 
 /**
  * How many tours may be loaded at once.
@@ -105,6 +107,52 @@ function getLibrary() {
 
 function getTour(tourId) {
     return tours.get(tourId) || null;
+}
+
+function comparisonStep(step) {
+    if (!step) return null;
+    return {
+        file: step.file,
+        startLine: step.startLine,
+        endLine: step.endLine,
+    };
+}
+
+function copyComparison(comparison) {
+    return comparison
+        ? { ...comparison, renames: { ...comparison.renames } }
+        : null;
+}
+
+function comparisonDetails(entry) {
+    const comparison = entry?.publication?.comparison;
+    if (!comparison) return null;
+    return {
+        tourId: entry.tourId,
+        publicationId: entry.publication.id || entry.publicationId,
+        repo: entry.publication.repo || entry.repo || null,
+        comparison: copyComparison(comparison),
+    };
+}
+
+function activeComparison() {
+    const entry = active();
+    const details = comparisonDetails(entry);
+    if (!details) return null;
+    return {
+        ...details,
+        step: comparisonStep(entry.steps[entry.current]),
+    };
+}
+
+function tourComparison(tourId) {
+    const entry = tours.get(tourId);
+    const details = comparisonDetails(entry);
+    if (!details) return null;
+    return {
+        ...details,
+        steps: entry.steps.map(comparisonStep),
+    };
 }
 
 function has(tourId) {
@@ -195,6 +243,89 @@ function text(value, max) {
     return s.length > max ? `${s.slice(0, max - 3)}...` : s;
 }
 
+function isPlainObject(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+}
+
+function validOid(value) {
+    return value === null || (typeof value === "string" && OID_PATTERN.test(value));
+}
+
+function validRelativePosixPath(value) {
+    if (typeof value !== "string" || value.trim().length === 0) return false;
+    if (CONTROL_PATTERN.test(value) || value.includes("\\") || value.startsWith("/")) {
+        return false;
+    }
+    if (/^[a-zA-Z]:/.test(value)) return false;
+    const segments = value.split("/");
+    return !segments.some((segment) => !segment || segment === "." || segment === "..");
+}
+
+function validateComparison(value, repo) {
+    if (value === undefined || value === null) {
+        return { ok: true, comparison: null };
+    }
+    if (!repo) return { ok: false, error: "sourceRepo is required" };
+    if (!isPlainObject(value)) return { ok: false, error: "comparison must be a plain object" };
+    if (!["live", "revisions"].includes(value.kind)) {
+        return { ok: false, error: "kind must be 'live' or 'revisions'" };
+    }
+    if (!validOid(value.base)) {
+        return { ok: false, error: "base must be a lowercase 40- or 64-character OID, or null" };
+    }
+    if (!validOid(value.target)) {
+        return { ok: false, error: "target must be a lowercase 40- or 64-character OID, or null" };
+    }
+    if (value.kind === "live" && value.target !== null) {
+        return { ok: false, error: "live comparisons require a null target" };
+    }
+    if (value.kind === "revisions" && value.target === null) {
+        return { ok: false, error: "revision comparisons require a target OID" };
+    }
+
+    const label = typeof value.label === "string" ? value.label.trim() : "";
+    if (!label) return { ok: false, error: "label must be a non-empty string" };
+    if (label.length > 120) return { ok: false, error: "label is limited to 120 characters" };
+    if (CONTROL_PATTERN.test(label)) {
+        return { ok: false, error: "label must not contain control characters" };
+    }
+    if (!isPlainObject(value.renames)) {
+        return { ok: false, error: "renames must be a plain object" };
+    }
+    const renameEntries = Object.entries(value.renames);
+    if (renameEntries.length > MAX_STEPS) {
+        return { ok: false, error: `renames is limited to ${MAX_STEPS} entries` };
+    }
+    for (const [newPath, oldPath] of renameEntries) {
+        if (!validRelativePosixPath(newPath) || !validRelativePosixPath(oldPath)) {
+            return {
+                ok: false,
+                error: "rename paths must be non-empty relative POSIX paths without dot segments",
+            };
+        }
+    }
+    if (
+        value.renamesComplete !== undefined &&
+        typeof value.renamesComplete !== "boolean"
+    ) {
+        return { ok: false, error: "renamesComplete must be a boolean" };
+    }
+
+    return {
+        ok: true,
+        comparison: {
+            kind: value.kind,
+            label,
+            base: value.base,
+            target: value.target,
+            renames: Object.fromEntries(renameEntries),
+            renamesComplete: value.renamesComplete ?? true,
+        },
+    };
+}
+
 function toInt(value, fallback) {
     const n = Number.parseInt(value, 10);
     return Number.isFinite(n) ? n : fallback;
@@ -268,6 +399,15 @@ async function upsert(payload = {}) {
     if (incoming.length > MAX_STEPS) {
         return { ok: false, error: `a tour is limited to ${MAX_STEPS} steps` };
     }
+    const repo = normaliseRepo(payload.sourceRepo);
+    const checkedComparison = validateComparison(payload.comparison, repo);
+    if (!checkedComparison.ok) {
+        return {
+            ok: false,
+            error: `invalid Recorded comparison: ${checkedComparison.error}`,
+        };
+    }
+    const comparison = checkedComparison.comparison;
 
     const tourId = slugFor(payload);
     const existing = tours.get(tourId);
@@ -342,7 +482,6 @@ async function upsert(payload = {}) {
         return { ok: false, error: "Tour publication storage is unavailable" };
     }
 
-    const repo = normaliseRepo(payload.sourceRepo);
     const head = await gitRevision(repo);
     const now = new Date().toISOString();
     const entry = {
@@ -363,6 +502,7 @@ async function upsert(payload = {}) {
             at: now,
             repo,
             commit: head.commit,
+            ...(comparison ? { comparison } : {}),
         },
         revisionState: head.commit ? "same-revision" : "unknown",
     };
@@ -440,6 +580,7 @@ async function upsert(payload = {}) {
             displayed: activate,
             file: persisted.result?.file,
             publication: entry.publication,
+            ...(comparison ? { comparisonRecorded: true } : {}),
             library: tours.size,
         },
     };
@@ -888,6 +1029,16 @@ const lensProvider = {
                 new vscode.CodeLens(range, { title: "$(x) Exit", command: "porthole.tour.exit" }),
             );
 
+            if (tour.publication?.comparison) {
+                lenses.push(
+                    new vscode.CodeLens(range, {
+                        title: "$(diff) Diff",
+                        tooltip: "Open the Step diff for this step; the Tour does not move",
+                        command: "porthole.tour.diff",
+                    }),
+                );
+            }
+
             // Only worth the line when there is somewhere else to switch to.
             if (tours.size > 1) {
                 lenses.push(
@@ -1015,8 +1166,11 @@ module.exports = {
     adopt,
     getLibrary,
     getTour,
+    activeComparison,
+    tourComparison,
     updateRevisionStates,
     has,
+    validateComparison,
     setPersistenceHandlers,
     republishAll,
     // the active tour

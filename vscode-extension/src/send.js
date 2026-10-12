@@ -246,7 +246,17 @@ function truncate(text, max) {
 
 // --- sending ----------------------------------------------------------------
 
+const SELECTION_HISTORY = "send:selection-history-v1";
+
 async function sendToCopilot() {
+    return send({ withHistory: false });
+}
+
+async function sendToCopilotWithHistory() {
+    return send({ withHistory: true });
+}
+
+async function send({ withHistory }) {
     const editor = vscode.window.activeTextEditor;
     if (!editor) {
         vscode.window.showInformationMessage("porthole: open a file first.");
@@ -261,6 +271,13 @@ async function sendToCopilot() {
         );
         return;
     }
+    if (withHistory && !(Array.isArray(endpoint.capabilities) && endpoint.capabilities.includes(SELECTION_HISTORY))) {
+        vscode.window.showWarningMessage(
+            "porthole: that Copilot session's porthole plugin cannot receive line history. " +
+                "Update the CLI plugin, or use 'Send selection to Copilot'.",
+        );
+        return;
+    }
 
     const document = editor.document;
     // An empty selection means the whole line, which is what people expect when
@@ -269,10 +286,25 @@ async function sendToCopilot() {
         ? document.lineAt(editor.selection.active.line).range
         : editor.selection;
 
+    let history;
+    if (withHistory) {
+        const lastLine = range.end.line + (range.end.character === 0 && range.end.line > range.start.line ? 0 : 1);
+        const collected = await require("./lastchanges").historyForSelection(
+            document,
+            range.start.line + 1,
+            Math.max(range.start.line + 1, lastLine),
+        );
+        if (!collected.ok) {
+            vscode.window.showWarningMessage(`porthole: could not read the line history - ${collected.error}.`);
+            return;
+        }
+        history = collected.history;
+    }
+
     const note = await vscode.window.showInputBox({
-        title: "porthole: send to Copilot",
+        title: withHistory ? "porthole: send with history to Copilot" : "porthole: send to Copilot",
         prompt: "What do you want to ask about this code? (optional)",
-        placeHolder: "e.g. why does this branch never fire?",
+        placeHolder: withHistory ? "e.g. why was this changed?" : "e.g. why does this branch never fire?",
     });
     if (note === undefined) return; // cancelled
 
@@ -292,6 +324,7 @@ async function sendToCopilot() {
         selection: selection.text,
         truncated: selection.truncated,
         diagnostics: diagnosticsFor(document, range),
+        ...(history ? { history } : {}),
     };
 
     const encoded = JSON.stringify(message);
@@ -393,7 +426,8 @@ async function waitForAck(messageId) {
 function activate(context) {
     context.subscriptions.push(
         vscode.commands.registerCommand("porthole.sendToCopilot", sendToCopilot),
+        vscode.commands.registerCommand("porthole.sendToCopilotWithHistory", sendToCopilotWithHistory),
     );
 }
 
-module.exports = { activate, findEndpoints, sendToCopilot };
+module.exports = { activate, findEndpoints, sendToCopilot, sendToCopilotWithHistory };

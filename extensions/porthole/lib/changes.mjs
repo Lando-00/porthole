@@ -1,7 +1,8 @@
 // A change inventory is not a walkthrough. Git supplies evidence about a
 // comparison; the model reads current saved files and chooses the actual stops.
+import { realpathSync } from "node:fs";
 import { lstat, open } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { runCommand } from "./command.mjs";
 
 export const CHANGE_LIMITS = Object.freeze({
@@ -241,6 +242,14 @@ async function comparison(args, ctx, head) {
     }
     if (raw) {
         if (!head) throw new EvidenceError("unborn", "This repository has no HEAD commit; use an initial-file inventory");
+        if (raw.endsWith("^!")) {
+            const single = await commit(ctx, raw.slice(0, -2));
+            if (!single) throw new EvidenceError("invalid-ref", `Git could not resolve '${raw}'`);
+            const parents = await ctx.git(["rev-list", "--parents", "-n", "1", single]);
+            if (!parents.ok) commandFailure(parents, "Could not read the commit's parent");
+            const parent = parents.stdout.trim().split(/\s+/)[1];
+            return { spec: parent ? [parent, single] : [single], rootCommit: !parent, description: `commit ${single.slice(0, 7)}`, basis: `revision ${single}` };
+        }
         const range = /^(.*?)\.{2,3}(.*?)$/.exec(raw);
         if (range) {
             const left = await commit(ctx, range[1] || "HEAD");
@@ -502,6 +511,7 @@ export async function collectChanges(args = {}, deps = {}) {
         description: selected.description,
         auto: selected.auto,
         coordinateBasis: selected.basis,
+        recordComparison: recordable(selected),
         mode: reason ? "inventory-only" : "candidates",
         inventoryReason: reason,
         inventoryComplete: selected.remoteFiles ? selected.remoteComplete : !warnings.some((warning) => warning.includes("changed during collection")),
@@ -518,6 +528,129 @@ function printable(value) {
     return /[\u0000-\u001f\u007f]/.test(text) ? JSON.stringify(text) : text;
 }
 
+// The argument porthole_tour needs to record this exact comparison. Resolved
+// commit IDs, so a branch that moves later cannot change what was recorded.
+function recordable(selected) {
+    if (selected.remoteFiles) return null;
+    if (selected.worktree) return { since: "uncommitted" };
+    if (selected.basis === "index") return { since: "staged" };
+    const label = selected.description;
+    if (selected.rootCommit) return { since: `${selected.spec[0]}^!`, label };
+    return { since: `${selected.spec[0]}..${selected.spec[1]}`, label };
+}
+
+const LABEL_LIMIT = 120;
+
+function cleanLabel(value) {
+    const text = String(value ?? "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+    return text.length > LABEL_LIMIT ? `${text.slice(0, LABEL_LIMIT - 1)}…` : text;
+}
+
+const REFUSED = new Set(["invalid-input", "invalid-ref"]);
+
+function toRepoPath(root, file) {
+    let absolute = resolve(root, String(file));
+    try { absolute = realpathSync.native(absolute); } catch { /* keep the resolved path */ }
+    const rel = relative(root, absolute);
+    if (!rel || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return null;
+    return rel.split(sep).join("/");
+}
+
+async function renamesFor(ctx, base, target, stepPaths) {
+    if (!base || !stepPaths.size) return { renames: {}, renamesComplete: true };
+    const args = ["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--find-renames", "--name-status", "-z", base];
+    if (target) args.push(target);
+    const result = await ctx.git([...args, "--"]);
+    if (!result.ok) return { renames: {}, renamesComplete: false };
+    const renames = {};
+    try {
+        for (const entry of parseNameStatus(result.stdout)) {
+            if (entry.oldPath && entry.status.startsWith("R") && stepPaths.has(entry.path)) renames[entry.path] = entry.oldPath;
+        }
+    } catch (error) {
+        if (!(error instanceof EvidenceError)) throw error;
+        return { renames: {}, renamesComplete: false };
+    }
+    return { renames, renamesComplete: true };
+}
+
+async function resolvePullRequest(ctx, pr) {
+    const result = await ctx.run("gh", ["pr", "view", String(pr), "--json", "headRefOid,baseRefOid,title"]);
+    if (!result.ok) return { unavailable: `could not read PR ${pr} with the GitHub CLI` };
+    let info;
+    try { info = json(result.stdout, "GitHub CLI"); }
+    catch (error) {
+        if (!(error instanceof EvidenceError)) throw error;
+        return { unavailable: error.message };
+    }
+    if (!COMMIT.test(info?.headRefOid || "") || !COMMIT.test(info?.baseRefOid || "")) {
+        return { unavailable: `GitHub CLI returned no valid revisions for PR ${pr}` };
+    }
+    const head = await commit(ctx, info.headRefOid);
+    const base = await commit(ctx, info.baseRefOid);
+    if (!head || !base) return { unavailable: `PR ${pr}'s commits are not available in this clone; fetch them to record its comparison` };
+    const ancestor = await mergeBase(ctx, base, head, { optional: true });
+    if (!ancestor) return { unavailable: `PR ${pr} has no merge-base with its base branch in this clone` };
+    return { kind: "revisions", base: ancestor, target: head, description: `PR ${pr} ${JSON.stringify(info.title || "untitled")}` };
+}
+
+/**
+ * Resolves the comparison a Tour explains into commit IDs, using the same
+ * rules as porthole_changes. Invalid input throws EvidenceError; a comparison
+ * that cannot be resolved here returns `{ unavailable }` so the Tour can still
+ * be published without one.
+ */
+export async function resolveComparison(input, deps = {}) {
+    if (!input || typeof input !== "object" || Array.isArray(input)) throw new EvidenceError("invalid-input", "'comparison' must be an object");
+    const since = typeof input.since === "string" ? input.since.trim() : input.since;
+    if (since !== undefined && (typeof since !== "string" || !since)) throw new EvidenceError("invalid-input", "'comparison.since' must be a non-empty revision or comparison name");
+    if (input.pr !== undefined && (!Number.isInteger(input.pr) || input.pr < 1)) throw new EvidenceError("invalid-input", "'comparison.pr' must be a positive pull request number");
+    if ((since === undefined) === (input.pr === undefined)) throw new EvidenceError("invalid-input", "'comparison' needs exactly one of 'since' or 'pr'");
+    if (input.label !== undefined && typeof input.label !== "string") throw new EvidenceError("invalid-input", "'comparison.label' must be a string");
+
+    const ctx = context(deps);
+    try {
+        const root = await ctx.git(["rev-parse", "--show-toplevel"]);
+        if (!root.ok) {
+            return { unavailable: /not a git repository/i.test(root.stderr) ? "not a git repository" : `could not locate the repository (${root.reason})` };
+        }
+        ctx.root = resolve(root.stdout.trim());
+        const head = await commit(ctx, "HEAD");
+        const notes = [];
+        let selected;
+        if (input.pr !== undefined) {
+            selected = await resolvePullRequest(ctx, input.pr);
+            if (selected.unavailable) return { root: ctx.root, unavailable: selected.unavailable };
+        } else if (["staged", "cached", "--staged", "--cached", "uncommitted"].includes(since)) {
+            if (since !== "uncommitted") notes.push("Staged changes are recorded as live working changes; the index is not durable evidence.");
+            selected = { kind: "live", base: head, target: null, description: "uncommitted changes" };
+        } else {
+            const chosen = await comparison({ since }, ctx, head);
+            selected = chosen.rootCommit
+                ? { kind: "revisions", base: null, target: chosen.spec[0], description: chosen.description }
+                : { kind: "revisions", base: chosen.spec[0], target: chosen.spec[1], description: chosen.description };
+        }
+        const stepPaths = new Set((deps.files || []).map((file) => toRepoPath(ctx.root, file)).filter(Boolean));
+        const { renames, renamesComplete } = await renamesFor(ctx, selected.base, selected.target, stepPaths);
+        if (!renamesComplete) notes.push("Rename history could not be collected within its budget.");
+        return {
+            root: ctx.root,
+            kind: selected.kind,
+            label: cleanLabel(input.label) || cleanLabel(selected.description),
+            base: selected.base,
+            target: selected.target,
+            renames,
+            renamesComplete,
+            notes,
+        };
+    } catch (error) {
+        if (!(error instanceof EvidenceError) || REFUSED.has(error.reason)) throw error;
+        return { root: ctx.root, unavailable: error.message };
+    }
+}
+
+export { EvidenceError };
+
 export function formatChanges(model) {
     const { files, candidates, description } = model;
     if (!files.length && model.inventoryComplete) return `porthole: no changes found for ${description}.`;
@@ -527,6 +660,11 @@ export function formatChanges(model) {
         `Coordinate basis: ${model.coordinateBasis}. Historical/index coordinates are evidence, not guaranteed current-file locations.`,
     ];
     if (model.auto) lines.push(`Auto-detected: ${model.auto}.`);
+    if (model.recordComparison) {
+        lines.push(`To record this comparison on a Tour, pass comparison: ${JSON.stringify(model.recordComparison)}`);
+    } else if (model.recordComparison === null) {
+        lines.push("No comparison can be recorded on a Tour until this PR's commits are available locally.");
+    }
     if (model.inventoryReason) lines.push(`Inventory only: ${model.inventoryReason}.`);
     if (!model.inventoryComplete) lines.push("INCOMPLETE INVENTORY: do not claim complete change coverage.");
     lines.push("");
@@ -587,7 +725,7 @@ export function tools(getSession = null) {
         parameters: {
             type: "object",
             properties: {
-                since: { type: "string", description: "Branch (merge-base), commit, a..b/a...b, staged, or uncommitted. Omit for automatic comparison selection." },
+                since: { type: "string", description: "Branch (merge-base), commit, a..b/a...b, <commit>^! (that commit's own changes), staged, or uncommitted. Omit for automatic comparison selection." },
                 pr: { type: "integer", description: "Positive GitHub PR number, using gh. Mutually exclusive with since. An unavailable local PR revision yields labelled inventory, not a forced checkout." },
                 limit: { type: "integer", description: "Maximum small-comparison candidates; default 60, max 200. Does not hide inventory files." },
                 includeAll: { type: "boolean", description: "Include generated/noise text candidate detail. All files remain accounted for; binaries remain metadata." },

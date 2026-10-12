@@ -49,6 +49,16 @@ historical coordinates are evidence about that comparison, not guaranteed
 locations in the user's current code. Clarify intent when the requested change
 and the available checkout do not answer the same question.
 
+When the Tour explains that change, pass `porthole_tour` the `comparison` that
+`porthole_changes` printed after "pass comparison:", unchanged. It records the
+exact revisions, so the user can open a Step diff (old vs new code) from each
+step. Omit it for Tours that explain code rather than a change. If the result
+says no comparison was recorded, tell the user why; the Tour still works.
+
+When the user asks what changed at a step, call `porthole_tour_manage` with
+`action: "diff"` rather than describing the old code from memory. It opens
+beside the source and does not move the Tour.
+
 Call `porthole_tours` before publishing. If a walkthrough of this already exists, extend or
 replace it rather than adding a near-duplicate, and say which you did.
 

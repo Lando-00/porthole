@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+**A walkthrough of a change remembers which change it explains.**
+`porthole_changes` now prints the exact comparison to pass, and `porthole_tour`
+takes it as `comparison`, resolved to commit IDs so a branch that moves later
+cannot change it. Uncommitted work, like what an autopilot session just did, is
+recorded as live working changes since a commit. A comparison that cannot be
+resolved here leaves the Tour usable and says why.
+
+**"What changed here?" is one click.** `porthole_tour_manage` gains `diff`,
+which opens a step's Step diff in VS Code without moving the Tour, in the same
+window the Tour is walked in. `porthole_changes` and the comparison accept
+`<commit>^!` for a single commit's own changes.
+
+**Selections can carry their history.** Sending with history renders each
+group as "last changed by", never authorship, with uncommitted and unsaved
+lines labelled. Requires Porthole companion 1.3.0.
+
 ## 1.3.0
 
 Requires Porthole companion 1.2.0 for the full guarantees; older companions keep

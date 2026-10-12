@@ -102,6 +102,8 @@ const GROUPS = [
         rows: [
             ["/problems", "What VS Code is reporting right now: errors, warnings, type errors"],
             ["Ctrl+Alt+.", "In VS Code: send the selection back into this session as a question"],
+            ["Right-click", "In VS Code: who last changed these lines; or send them with that history"],
+            ["Diff", "Above a step of a walkthrough of a change: old vs new code, beside the tour"],
         ],
     },
     {

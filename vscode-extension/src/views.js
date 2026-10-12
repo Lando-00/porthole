@@ -299,9 +299,11 @@ class TourProvider {
 
     tourNode(entry, activeTourId) {
         const isActive = entry.tourId === activeTourId;
+        const comparison = entry.publication?.comparison || null;
         const children = entry.steps.map((step) =>
-            this.stepNode(step, isActive ? entry.current : -1, entry.steps.length, entry.tourId),
+            this.stepNode(step, isActive ? entry.current : -1, entry.steps.length, entry.tourId, Boolean(comparison)),
         );
+        if (comparison) children.unshift(this.comparisonNode(entry, comparison, isActive));
 
         const drifted = entry.steps.filter(
             (s) => s.status === "changed" || s.status === "missing",
@@ -376,7 +378,32 @@ class TourProvider {
         });
     }
 
-    stepNode(step, current, total, tourId) {
+    comparisonNode(entry, comparison, isActive) {
+        const short = (oid) => (oid ? String(oid).slice(0, 7) : "empty tree");
+        const to = comparison.kind === "live" ? "saved files" : short(comparison.target);
+        const tooltip = new vscode.MarkdownString();
+        tooltip.isTrusted = false;
+        tooltip.appendText(
+            comparison.kind === "live"
+                ? `Recorded comparison: live working changes since ${short(comparison.base)}.`
+                : `Recorded comparison: ${comparison.label} (${short(comparison.base)} → ${short(comparison.target)}).`,
+        );
+        tooltip.appendMarkdown("\n\nOpens the Step diff for the current step. The Tour does not move.");
+        return new Node(`Comparison: ${comparison.label}`, vscode.TreeItemCollapsibleState.None, {
+            id: `tour-${entry.tourId}-comparison`,
+            description: `${short(comparison.base)} → ${to}`,
+            tooltip,
+            iconPath: themed("git-compare"),
+            contextValue: "tourComparison",
+            command: {
+                command: "porthole.tour.diff",
+                title: "Open Step diff",
+                arguments: [{ portholeStep: { tourId: entry.tourId, index: isActive && entry.current >= 0 ? entry.current : 0 } }],
+            },
+        });
+    }
+
+    stepNode(step, current, total, tourId, compared = false) {
         const state =
             current < 0
                 ? "pending"
@@ -422,9 +449,10 @@ class TourProvider {
                     title: "Go to step",
                     arguments: [tourId, step.index],
                 },
-                contextValue: "tourStep",
+                contextValue: compared ? "tourStepCompared" : "tourStep",
             },
         );
+        node.portholeStep = { tourId, index: step.index };
 
         const tooltip = new vscode.MarkdownString();
         tooltip.isTrusted = false; // model-written text

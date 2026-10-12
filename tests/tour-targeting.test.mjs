@@ -100,7 +100,7 @@ test("CLI Tour presentation targets one named owned window and reports the actua
                 tourId: "targeted",
                 windowId: secondary.windowId,
             });
-            assert.match(refused, /windowId is only valid for activate, goto, or close/);
+            assert.match(refused, /windowId is only valid for activate, goto, close, or diff/);
         }
         assert.equal(secondary.startedRequests.length, beforeDestructive);
     } finally {

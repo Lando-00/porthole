@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- Tours store a Recorded comparison in their publication when the CLI sends
+  one. It is never rewritten by progress, listing, advisories or diffs, and
+  imports keep it.
+- **Step diff**: a `Diff` lens above the current step, a *Comparison* item in
+  the sidebar, and the `tour-diff` route open the native diff beside the source,
+  saved file on the right, without moving the Tour. A missing commit is
+  reported; nothing is fetched.
+- **Change markers** show what the comparison touched in the active Tour's
+  files; hidden while a file has unsaved edits. `porthole.tour.changeMarkers`
+  and a per-window toggle.
+- **Who last changed these lines?** groups a selection by commit, with Compare,
+  Copy commit ID and Open commit; uncommitted and unsaved lines are labelled.
+- **Send selection with history to Copilot** attaches those last changes.
+
 ## 1.2.0
 
 - Guarded operations validate the expected session and deduplicate bounded

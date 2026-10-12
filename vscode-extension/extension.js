@@ -38,6 +38,10 @@ const workspace = require("./src/workspace");
 const identity = require("./src/identity");
 const focus = require("./src/focus");
 const preview = require("./src/preview");
+const stepdiff = require("./src/stepdiff");
+const revcontent = require("./src/revcontent");
+const changemarkers = require("./src/changemarkers");
+const lastchanges = require("./src/lastchanges");
 const { createDispatcher } = require("./src/dispatcher");
 const capabilities = require("./src/capabilities");
 const { createSessionBinding } = require("./src/binding");
@@ -130,6 +134,9 @@ async function dispatch(route, payload) {
 
         case "tour-legacy-cleanup":
             return tourstore.cleanupLegacy(payload);
+
+        case "tour-diff":
+            return stepdiff.route(payload);
 
         case "review-save":
             return reviews.save(payload);
@@ -283,6 +290,10 @@ function activate(context) {
     identity.activate(context);
     context_.activate(context);
     onboarding.activate(context);
+    revcontent.register(vscode, context);
+    stepdiff.activate(context);
+    changemarkers.activate(context);
+    lastchanges.activate(context);
 
     // Wired here rather than inside diagnostics.js, which must not depend on
     // the two modules that feed it.

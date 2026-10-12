@@ -19,9 +19,11 @@ const LEGACY_ROUTES = new Set([
 
 export const CLI_PROTOCOL_LEVEL = 1;
 export const SESSION_OWNED_OPERATIONS = "transport:session-owned-operations-v1";
+export const SELECTION_HISTORY = "send:selection-history-v1";
 export const CLI_CAPABILITIES = Object.freeze([
     "transport:addressed-inbox",
     SESSION_OWNED_OPERATIONS,
+    SELECTION_HISTORY,
 ]);
 export const REQUIRED_COMPANION_CAPABILITIES = Object.freeze([
     "transport:addressed-inbox",

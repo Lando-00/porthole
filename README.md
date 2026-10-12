@@ -95,7 +95,7 @@ without you typing anything.
 | `porthole_tour_discover` | Searches read-only Saved Tours owned by other Copilot sessions |
 | `porthole_tour_import` | Copies a discovered Tour into this session with provenance |
 | `porthole_tour_cleanup_legacy` | Confirms and deletes one provable legacy copy |
-| `porthole_tour_manage` | Switches, closes or deletes a walkthrough by id |
+| `porthole_tour_manage` | Switches, closes or deletes a walkthrough by id, or opens a step's Step diff |
 | `porthole_problems` | Reads your Problems panel, so it stops guessing at compile errors |
 | `porthole_changes` | Lists changed files and provides candidate evidence; large changes return an inventory |
 | `porthole_review` | Saves, lists, loads or deletes this session's findings |
@@ -196,6 +196,32 @@ differs from the publication's revision. It is not a push detector or proof that
 the explanation is wrong. There is no continuous freshness monitor or automatic
 narration update; the user and model decide when to refresh a Tour.
 
+### What changed here?
+
+A walkthrough of a change records **which** change it explains — the exact base
+and target commits, or "live working changes since" a commit for uncommitted
+work such as what an autopilot session just did. Then:
+
+- **Diff** above the current step (or the sidebar's *Comparison* item) opens VS
+  Code's own diff beside the walkthrough: the old code on the left, your saved
+  file on the right, with the step selected. The walkthrough does not move. If
+  your file has changed since, the diff says so, and the recorded revisions are
+  one click away.
+- **Change markers** — thin line borders and scrollbar marks — show what the
+  change added, modified or removed in the tour's files while it is active.
+  They hide while a file has unsaved edits. Toggle them per window, or turn off
+  `porthole.tour.changeMarkers`.
+- Porthole never fetches or checks anything out. A commit missing from your
+  clone is reported, not obtained.
+
+### Who last changed these lines?
+
+Right-click a selection → **porthole: Who last changed these lines?** lists the
+commits that last touched each line, grouped by commit, with **Compare**,
+**Copy commit ID** and **Open commit**. Unsaved and uncommitted lines are
+labelled as such, never credited to an author. It reports the last change, not
+who originally wrote the code.
+
 ### plan.md opens itself
 
 When the session folder has a `plan.md`, opening the session makes it the active
@@ -216,6 +242,11 @@ prompt.
 
 It waits for the session to confirm receipt, so it never claims to have sent
 something that did not arrive.
+
+**porthole: Send selection with history to Copilot** adds the lines' last
+changes — commit, summary, author and date per group, uncommitted lines
+labelled — so you can ask *why* code looks the way it does with the evidence
+already attached.
 
 ### Why the split
 

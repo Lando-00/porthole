@@ -161,6 +161,30 @@
         "command": "porthole.tour.restoreArchived",
         "title": "porthole: Restore archived tour",
         "icon": "$(history)"
+      },
+      {
+        "command": "porthole.tour.diff",
+        "title": "porthole: Open Step diff",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "porthole.tour.diffRecorded",
+        "title": "porthole: Open Step diff against the recorded revisions",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "porthole.tour.toggleChangeMarkers",
+        "title": "porthole: Toggle change markers"
+      },
+      {
+        "command": "porthole.lineLastChanges",
+        "title": "porthole: Who last changed these lines?",
+        "icon": "$(history)"
+      },
+      {
+        "command": "porthole.sendToCopilotWithHistory",
+        "title": "porthole: Send selection with history to Copilot",
+        "icon": "$(comment-discussion)"
       }
     ],
     "viewsContainers": {
@@ -294,6 +318,11 @@
           "type": "boolean",
           "default": true,
           "description": "Open and scroll to the focused annotation when a new set arrives."
+        },
+        "porthole.tour.changeMarkers": {
+          "type": "boolean",
+          "default": true,
+          "description": "While a Tour with a Recorded comparison is active, mark the lines that comparison added, modified or removed in that Tour's files. Hidden while a file has unsaved edits."
         }
       }
     },
@@ -348,6 +377,18 @@
         {
           "command": "porthole.tour.closeAll",
           "when": "porthole.tourLibrary"
+        },
+        {
+          "command": "porthole.tour.diff",
+          "when": "porthole.tourHasComparison"
+        },
+        {
+          "command": "porthole.tour.diffRecorded",
+          "when": "porthole.tourHasComparison"
+        },
+        {
+          "command": "porthole.tour.toggleChangeMarkers",
+          "when": "porthole.tourHasComparison"
         }
       ],
       "editor/context": [
@@ -355,6 +396,16 @@
           "command": "porthole.sendToCopilot",
           "group": "porthole@1",
           "when": "editorTextFocus"
+        },
+        {
+          "command": "porthole.sendToCopilotWithHistory",
+          "group": "porthole@2",
+          "when": "editorTextFocus && resourceScheme == file"
+        },
+        {
+          "command": "porthole.lineLastChanges",
+          "group": "porthole@3",
+          "when": "editorTextFocus && resourceScheme == file"
         }
       ],
       "view/title": [
@@ -409,6 +460,21 @@
           "command": "porthole.tour.archive",
           "when": "view == porthole.tour && viewItem =~ /^tour(Active|Inactive)$/",
           "group": "inline@2"
+        },
+        {
+          "command": "porthole.tour.diff",
+          "when": "view == porthole.tour && viewItem == tourStepCompared",
+          "group": "inline@1"
+        },
+        {
+          "command": "porthole.tour.diffRecorded",
+          "when": "view == porthole.tour && viewItem == tourStepCompared",
+          "group": "porthole@2"
+        },
+        {
+          "command": "porthole.lineLastChanges",
+          "when": "view == porthole.tour && viewItem =~ /^tourStep/",
+          "group": "porthole@3"
         }
       ]
     }

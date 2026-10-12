@@ -15,9 +15,10 @@
 // almost nothing, and activate/close/delete/goto all take just an id - so
 // three tools, and the last four verbs share one.
 
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 
+import { EvidenceError, resolveComparison } from "./changes.mjs";
 import { callCompanion, explain } from "./companion.mjs";
 import { ensureCompanion } from "./ensure.mjs";
 import { companionOptions } from "./target.mjs";
@@ -42,7 +43,7 @@ function resolveStep(step, root) {
 
 // --- creating ---------------------------------------------------------------
 
-export async function tour(args = {}, getSession = null) {
+export async function tour(args = {}, getSession = null, deps = {}) {
     const root = process.cwd();
     const incoming = Array.isArray(args.steps) ? args.steps : [];
     if (incoming.length === 0) return "porthole: a tour needs at least one step.";
@@ -69,6 +70,30 @@ export async function tour(args = {}, getSession = null) {
     }
 
     const sourceRepo = isGitRepo(root) ? projectRoot(root) : null;
+
+    let recorded;
+    let comparisonNote = "";
+    if (args.comparison !== undefined && args.comparison !== null) {
+        let resolved;
+        try {
+            resolved = await (deps.resolveComparison || resolveComparison)(args.comparison, {
+                cwd: root,
+                files: steps.map((step) => step.file),
+            });
+        } catch (error) {
+            if (!(error instanceof EvidenceError)) throw error;
+            return `porthole: invalid comparison - ${error.message}. Nothing was published; copy the comparison porthole_changes printed.`;
+        }
+        if (resolved.unavailable) {
+            comparisonNote = `\nNo Recorded comparison: ${resolved.unavailable}. Step diffs are unavailable for this Tour.`;
+        } else if (!sourceRepo || !sameDirectory(resolved.root, sourceRepo)) {
+            comparisonNote = "\nNo Recorded comparison: the comparison's repository is not this Tour's repository.";
+        } else {
+            const { kind, label, base, target, renames, renamesComplete, notes } = resolved;
+            recorded = { comparison: { kind, label, base, target, renames, renamesComplete }, notes };
+        }
+    }
+
     const { note: openNote } = await ensureCompanion(getSession, {
         openIfClosed: args.openIfClosed === true,
         windowId: args.windowId,
@@ -83,6 +108,7 @@ export async function tour(args = {}, getSession = null) {
             activate: args.activate !== false,
             replace: args.replace,
             sourceRepo,
+            ...(recorded ? { comparison: recorded.comparison } : {}),
         },
         companionOptions(root, getSession, { windowId: args.windowId }),
     );
@@ -124,8 +150,37 @@ export async function tour(args = {}, getSession = null) {
 
     if (library > 1) message += ` ${library} tours are now loaded.`;
     if (skipped.length) message += `\nSkipped: ${skipped.join("; ")}`;
+    if (recorded) {
+        if (result.result?.comparisonRecorded) {
+            message += `\nRecorded comparison: ${describeComparison(recorded.comparison)}. The user can open a Step diff from the Diff control above each step.`;
+            for (const note of recorded.notes) message += `\n${note}`;
+        } else {
+            message += "\nThe running companion did not record the comparison; update the Porthole companion to enable Step diffs.";
+        }
+    }
+    message += comparisonNote;
 
     return withDeliveryNotes(result, message);
+}
+
+function shortOid(oid) {
+    return oid ? String(oid).slice(0, 7) : "empty tree";
+}
+
+/** One line naming a Recorded comparison, for the model and the user. */
+export function describeComparison(comparison) {
+    if (!comparison) return "none";
+    const to = comparison.kind === "live" ? "saved files" : shortOid(comparison.target);
+    return `${comparison.label} (${shortOid(comparison.base)} -> ${to})`;
+}
+
+function sameDirectory(left, right) {
+    const canonical = (dir) => {
+        try { return realpathSync.native(dir); } catch { return resolve(dir); }
+    };
+    const a = canonical(left);
+    const b = canonical(right);
+    return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 // --- listing ----------------------------------------------------------------
@@ -166,6 +221,7 @@ export async function tours(args = {}, sessionSource = null) {
         else if (t.revisionState === "unknown") bits.push("revision unknown");
         else if (t.revisionState === "same-revision") bits.push("same revision");
         if (t.savedPublicationChanged) bits.push("saved copy differs");
+        if (t.comparison) bits.push(`comparison ${describeComparison(t.comparison)}`);
 
         lines.push(`  ${t.tourId} - "${t.title}" (${bits.join(", ")})`);
 
@@ -312,17 +368,40 @@ export async function manage(args = {}, sessionSource = null) {
     const action = String(args.action || "activate");
     const tourId = String(args.tourId || "").trim();
     const presentationAction =
-        action === "activate" || action === "goto" || action === "close";
+        action === "activate" || action === "goto" || action === "close" || action === "diff";
 
     if (args.windowId && !presentationAction) {
         return (
-            `porthole: windowId is only valid for activate, goto, or close. ` +
+            `porthole: windowId is only valid for activate, goto, close, or diff. ` +
             `'${action}' changes the session-owned Tour artifact on the primary window.`
         );
     }
 
     if (action !== "close" && !tourId) {
         return "porthole: which tour? Call porthole_tours to see the ids.";
+    }
+
+    if (action === "diff") {
+        const result = await callCompanion(
+            "tour-diff",
+            {
+                tourId,
+                step: Number.isInteger(args.step) ? args.step : undefined,
+                side: args.side === "target" ? "target" : "saved",
+            },
+            companionOptions(process.cwd(), sessionSource, { windowId: args.windowId }),
+        );
+        if (!result.ok) return withDeliveryNotes(result, `porthole: ${explain(result)}`);
+        const r = result.result || {};
+        let message =
+            `porthole: opened the Step diff for step ${(r.step ?? 0) + 1} of '${tourId}' ` +
+            `(${r.title || "comparison"}). The Tour did not move.`;
+        if (r.savedDiffersFromTarget) {
+            message += " The saved file differs from the recorded target revision; side 'target' shows the recorded revisions.";
+        }
+        if (r.noChangesInRange) message += " The comparison changed nothing inside this step's range.";
+        for (const note of r.notes || []) message += `\n${note}`;
+        return withDeliveryNotes(result, message);
     }
 
     if (action === "activate" || action === "goto") {
@@ -396,7 +475,7 @@ export async function manage(args = {}, sessionSource = null) {
         );
     }
 
-    return `porthole: '${action}' is not one of activate, goto, close, archive, unarchive, delete.`;
+    return `porthole: '${action}' is not one of activate, goto, close, archive, unarchive, delete, diff.`;
 }
 
 /** The pre-library name, kept so /tour-exit keeps working. */
@@ -507,6 +586,21 @@ export function tools(getSession = null) {
                         description:
                             "Optional owned Porthole window to present this Tour in. The target " +
                             "must be supplied again on follow-up calls; omitting it uses the primary.",
+                    },
+                    comparison: {
+                        type: "object",
+                        description:
+                            "The change this Tour explains, so the user can open a Step diff of " +
+                            "old vs new code. Copy the value porthole_changes printed after " +
+                            "'pass comparison:'. Omit for Tours that explain code rather than a change.",
+                        properties: {
+                            since: {
+                                type: "string",
+                                description: "a..b, a...b, <commit>^!, a branch, uncommitted, or staged.",
+                            },
+                            pr: { type: "integer", description: "GitHub PR number whose commits exist locally." },
+                            label: { type: "string", description: "Short human name, e.g. 'main...HEAD'." },
+                        },
                     },
                 },
                 required: ["steps"],
@@ -625,7 +719,10 @@ export function tools(getSession = null) {
                 "saved and searchable with porthole_tours includeArchived.\n" +
                 "  unarchive - return an archived Tour to the default Tour Library.\n" +
                 "  delete   - remove it from the library and from disk. Destructive; only when " +
-                "the user asks.\n\n" +
+                "the user asks.\n" +
+                "  diff     - open the Step diff for a step of a Tour with a Recorded comparison: " +
+                "the native VS Code diff of what that change did to the step's file, beside the " +
+                "source. Does not move the Tour. The Tour must be loaded in that window.\n\n" +
                 "Use porthole_tours first to find the id. Close, Archive and Delete are distinct: " +
                 "prefer close for a pause, archive for durable decluttering, and delete only " +
                 "when the user wants the Tour permanently removed.",
@@ -638,17 +735,24 @@ export function tools(getSession = null) {
                     },
                     action: {
                         type: "string",
-                        enum: ["activate", "goto", "close", "archive", "unarchive", "delete"],
+                        enum: ["activate", "goto", "close", "archive", "unarchive", "delete", "diff"],
                         description: "What to do with it. Defaults to activate.",
                     },
                     step: {
                         type: "integer",
-                        description: "For 'goto': the step to jump to, 0-based.",
+                        description: "For 'goto' and 'diff': the step, 0-based. 'diff' defaults to the current step.",
+                    },
+                    side: {
+                        type: "string",
+                        enum: ["saved", "target"],
+                        description:
+                            "For 'diff': compare against the saved file (default) or the recorded " +
+                            "target revision.",
                     },
                     windowId: {
                         type: "string",
                         description:
-                            "Optional owned Porthole window for activate, goto, or close. It is " +
+                            "Optional owned Porthole window for activate, goto, close, or diff. It is " +
                             "rejected for archive, unarchive, and delete.",
                     },
                 },

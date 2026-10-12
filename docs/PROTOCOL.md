@@ -322,6 +322,7 @@ Set by the CLI so callers can react without parsing English:
 | `tour-import` | `{ sourceSessionId, sourceTourId, targetTourId, replace }` | **yes** | 1.0.0 |
 | `tour-archive` | `{ tourId, archived }` | **yes** | 1.0.0 |
 | `tour-legacy-cleanup` | `{ sourceSessionId, sourceTourId }` | **yes** | 1.0.0 |
+| `tour-diff` | `{ tourId, step, side }` | **yes** | 1.3.0 |
 | `review-save` | `{ slug, title }` | **yes** | 0.3.0 |
 | `review-list` | `{ limit, repo }` | **yes** | 0.3.0 |
 | `review-load` | `{ file }` or `{ slug }` | **yes** | 0.3.0 |
@@ -404,7 +405,16 @@ drops the least important entries rather than an arbitrary tail.
       "severity": "info"             // styling only
     }
   ],
-  "start": true              // pre-0.4.0 name for `activate`, still honoured
+  "start": true,             // pre-0.4.0 name for `activate`, still honoured
+  "sourceRepo": "C:\\repo",  // the CLI's repository top level, or null
+  "comparison": {            // optional Recorded comparison, resolved by the CLI
+    "kind": "revisions",     // or "live": uncommitted changes since `base`
+    "label": "main...HEAD",  // <= 120 characters, no control characters
+    "base": "<full commit ID or null>",   // null: root commit or unborn repository
+    "target": "<full commit ID>",         // null exactly when kind is "live"
+    "renames": { "src/new.js": "src/old.js" },  // step files only, <= 50 entries
+    "renamesComplete": true
+  }
 }
 
 // result
@@ -414,12 +424,19 @@ drops the least important entries rather than an arbitrary tail.
   "steps": 5,
   "active": true,
   "library": 3,
-  "skipped": [ { "index": 3, "reason": "file not found" } ]
+  "skipped": [ { "index": 3, "reason": "file not found" } ],
+  "comparisonRecorded": true // present only when a comparison was stored
 }
 ```
 
 A step whose file cannot be resolved is **skipped and reported**, not silently
 dropped — the same class of bug as the fire-and-forget URI.
+
+A malformed `comparison` refuses the whole publication and writes nothing; it
+means the CLI is broken, not that the user's state is unusual. A comparison
+needs a non-null `sourceRepo`. An older companion ignores the field and omits
+`comparisonRecorded`, which the CLI reports as "did not record the comparison".
+See [ADR 0004](adr/0004-recorded-comparisons.md).
 
 Publication captures original anchors and repository metadata before a later
 cursor save can observe different code. A newly requested step requires a saved
@@ -429,6 +446,32 @@ distinction.
 
 Up to **30 tours** may be loaded at once. Beyond that the call is refused
 rather than evicting something the user may be part-way through.
+
+#### `tour-diff`  *(new in companion 1.3.0)*
+
+```jsonc
+// payload
+{ "tourId": "auth-path", "step": 2, "side": "saved" }  // step 0-based, defaults to
+                                                       // the current step; side
+                                                       // "saved" (default) or "target"
+// result
+{
+  "tourId": "auth-path", "step": 2, "side": "saved",
+  "title": "auth.js — main...HEAD",
+  "savedDiffersFromTarget": false,
+  "noChangesInRange": false,
+  "notes": []
+}
+```
+
+Opens VS Code's diff editor beside the source for one step of a Tour loaded in
+the answering window. The left side is the comparison's base (the step file's
+old path when it was renamed, or empty); the right side is the saved file, or
+the recorded target revision for `side: "target"`. Old revisions are served
+read-only through the `porthole-rev:` scheme by `git show`. It never moves the
+Tour, fetches, or checks out. Errors: `not-loaded`, `no-comparison`,
+`no-active-tour`, `invalid-step`, `missing-object` (a commit absent from this
+clone), `outside-repository`.
 
 #### `tour-list` / `tour-activate` / `tour-delete`  *(new in 0.4.0)*
 
@@ -569,7 +612,7 @@ primary closes the next oldest takes over, with no stored state to go stale.
 | Request | Target |
 |---|---|
 | explicit `windowId` | that owned window only; a conflicting binding is refused |
-| `tour`, `tour-activate`, `tour-exit` | primary by default, or an explicitly selected owned window |
+| `tour`, `tour-activate`, `tour-exit`, `tour-diff` | primary by default, or an explicitly selected owned window |
 | `reveal`, `annotate`, `annotate-clear` | every owned window concurrently within one deadline; the primary's ack is the answer and `alsoShownIn` reports each secondary |
 | everything else, including `preview`, `workspace-add`, deletions and queries | the primary alone |
 | a window owned by a **different** session | refused, unchanged |
@@ -798,9 +841,21 @@ arrived.
   "selection": "function launcherFor(name) { ... }",
   "diagnostics": [
     { "severity": "error", "line": 30, "message": "...", "source": "ts" }
+  ],
+  "history": [               // optional; only to endpoints advertising
+                             // send:selection-history-v1
+    { "oid": "<full commit ID>", "author": "...", "time": 1785615001442,
+      "summary": "...", "lines": [25, 26, 30], "uncommitted": false },
+    { "oid": null, "author": null, "time": null, "summary": null,
+      "lines": [27], "uncommitted": true, "unsaved": true }
   ]
 }
 ```
+
+`history` is the selection's Line last-changes: at most 20 groups, summaries at
+most 200 characters. The CLI renders it as quoted "last changed by" evidence,
+never as authorship, and skips malformed groups. The companion refuses to send
+it to an endpoint that does not advertise `send:selection-history-v1`.
 
 ### Delivery
 
@@ -992,7 +1047,9 @@ identifier, so those three can never disagree.
     "id": "<publication identity>",
     "at": "<publication timestamp>",
     "repo": "C:\\Dev\\active\\porthole",
-    "commit": "<full commit ID or null>"
+    "commit": "<full commit ID or null>",
+    "comparison": { "kind": "revisions", "label": "...", "base": "...", "target": "...",
+                    "renames": {}, "renamesComplete": true }  // only when recorded
   },
   "steps": [
     { "file": "src/auth.js",       // relative to `repo` when inside it
@@ -1008,7 +1065,10 @@ identifier, so those three can never disagree.
 Publication captures original anchors and source-repository metadata immediately
 and saves the authored Tour. Only an explicit replacement establishes new source
 evidence. The persisted repository locator determines later commit lookups;
-another window's project cannot silently replace it.
+another window's project cannot silently replace it. A Recorded comparison is
+part of the publication: progress, listing, revision advisories, archive and
+Step diffs never rewrite it, and import copies it verbatim. A stored comparison
+that fails validation on read is dropped from the loaded Tour and logged.
 
 Cursor autosaves write only:
 

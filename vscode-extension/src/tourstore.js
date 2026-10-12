@@ -169,6 +169,9 @@ function publish(entry, options = {}) {
             at: String(entry.publication.at),
             repo,
             commit: entry.publication.commit || null,
+            ...(entry.publication.comparison
+                ? { comparison: entry.publication.comparison }
+                : {}),
         },
         steps: entry.steps.map((step) => ({
             file: storedPath(step.file, repo),
@@ -278,6 +281,24 @@ function read(file) {
         const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
         if (!parsed || parsed.schema !== SCHEMA || !SLUG_PATTERN.test(String(parsed.tourId || ""))) {
             return null;
+        }
+        if (
+            parsed.publication &&
+            Object.prototype.hasOwnProperty.call(parsed.publication, "comparison")
+        ) {
+            const checked = tour.validateComparison(
+                parsed.publication.comparison,
+                normaliseRepo(parsed.publication.repo),
+            );
+            if (checked.ok && checked.comparison) {
+                parsed.publication.comparison = checked.comparison;
+            } else {
+                delete parsed.publication.comparison;
+                diag(
+                    `dropped invalid Recorded comparison from ${file}: ` +
+                        `${checked.error || "comparison is empty"}`,
+                );
+            }
         }
         return parsed;
     } catch {
@@ -470,6 +491,7 @@ async function list(payload = {}) {
             staleness: entry.staleness,
             revisionState: revisionFor(entry, revisions),
             publication: entry.publication,
+            comparison: entry.publication?.comparison || null,
             savedPublicationChanged: Boolean(record && publicationIdFor(record) !== (entry.publication?.id || entry.publicationId)),
             stepDetail: includeSteps ? entry.steps.map(describeStep) : undefined,
         });
@@ -496,6 +518,7 @@ async function list(payload = {}) {
             staleness,
             revisionState: revisionFor(record, revisions),
             publication: record.publication,
+            comparison: record.publication?.comparison || null,
             stepDetail: includeSteps ? steps.map(describeStep) : undefined,
         });
     }

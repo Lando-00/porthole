@@ -82,6 +82,26 @@ A notice that the repository revision differs from the one recorded for a Tour
 publication; it does not assert that the explanation is incorrect.
 _Avoid_: Verified explanation, automatic review
 
+**Recorded comparison**:
+The change a Tour explains, fixed in its Tour publication: a base revision and
+either a target revision or, for live working changes, the saved files.
+_Avoid_: Tour history, current diff
+
+**Step diff**:
+The old and new code of one Tour step's file under its Tour's Recorded
+comparison, shown beside the Walkthrough without moving it.
+_Avoid_: Tour diff, patch view
+
+**Change marker**:
+A mark on a line that a Tour's Recorded comparison added, modified, or removed
+near, shown while that Tour is active.
+_Avoid_: Diff decoration, git gutter
+
+**Line last-changes**:
+The commits that most recently changed selected lines, grouped by commit; lines
+not yet committed are reported as such. It is not authorship.
+_Avoid_: Blame, who wrote this, line history
+
 **Tour library**:
 The collection of tours owned by one Copilot session. A resumed session
 restores its library across VS Code closes and CLI restarts; a fork starts with
