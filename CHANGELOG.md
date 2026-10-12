@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
+
+Requires Porthole companion 1.2.0 for the full guarantees; older companions keep
+working in legacy single-shot mode and say so.
 
 **Tours stay in the window you chose.** Presentation uses the session's primary
 window by default, or an explicitly selected owned window. The library remains

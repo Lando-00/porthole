@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
 
 - Guarded operations validate the expected session and deduplicate bounded
   retries in the same live host. Older callers retain explicit legacy one-shot
