@@ -74,9 +74,23 @@ function revisionBudget(options) {
         : 0;
 }
 
+/**
+ * Git reports its top level as a canonical long path, while the saved locator
+ * may be a junction, symlink or 8.3 short name for the same directory.
+ */
+function canonicalPath(dir) {
+    const resolved = normaliseRepo(dir);
+    if (!resolved) return null;
+    try {
+        return fs.realpathSync.native(resolved);
+    } catch {
+        return resolved;
+    }
+}
+
 function sameRepository(left, right) {
-    const a = normaliseRepo(left);
-    const b = normaliseRepo(right);
+    const a = canonicalPath(left);
+    const b = canonicalPath(right);
     return Boolean(a && b && (process.platform === "win32"
         ? a.toLowerCase() === b.toLowerCase()
         : a === b));
@@ -237,6 +251,7 @@ module.exports = {
     gitRevision,
     gitRevisions,
     revisionState,
+    sameRepository,
     normaliseRepo,
     isInside,
     storedPath,

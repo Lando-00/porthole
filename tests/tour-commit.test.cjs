@@ -91,6 +91,29 @@ test("Tour revision lookup returns full commits for packed refs and linked workt
     }
 });
 
+test("Tour revision lookup accepts a junction or symlink to the repository root", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "porthole-tour-alias-"));
+    const repository = path.join(root, "repository");
+    const alias = path.join(root, "alias");
+    const repo = loadRepoModule();
+
+    try {
+        initialiseRepository(repository);
+        const expected = runGit(repository, ["rev-parse", "HEAD"]);
+        fs.symlinkSync(repository, alias, process.platform === "win32" ? "junction" : "dir");
+
+        const aliased = await repo.gitRevision(alias);
+        assert.equal(aliased.commit, expected);
+        assert.equal(aliased.repo, path.resolve(alias));
+        assert.equal(repo.sameRepository(alias, repository), true);
+
+        fs.mkdirSync(path.join(repository, "nested"));
+        assert.equal((await repo.gitRevision(path.join(alias, "nested"))).commit, null);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test("Tour revision batches coalesce repositories and share a bounded lookup window", async () => {
     const repo = loadRepoModule();
     const calls = [];

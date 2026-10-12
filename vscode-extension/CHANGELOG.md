@@ -11,6 +11,8 @@
 - Step presentation requires a saved target buffer. An on-demand repository
   revision advisory leaves explanation refresh decisions to the user and model.
 - Promoting existing findings preserves inherited source evidence.
+- The revision advisory works when the repository was opened through a
+  junction, symlink or 8.3 short path, instead of always reporting unknown.
 
 ## 1.1.0
 

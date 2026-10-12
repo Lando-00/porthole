@@ -129,9 +129,10 @@ test("the formatted output tells the model these are candidates, not a tour", ()
 // --- against a real repository ----------------------------------------------
 
 function makeRepo() {
-    // realpathSync because macOS hands out a symlinked temp dir and git reports
-    // the resolved one, which would make every path comparison here disagree.
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "porthole-changes-")));
+    // The native realpath because macOS hands out a symlinked temp dir and the
+    // Windows runner an 8.3 short one; git reports the resolved long path, which
+    // would make every path comparison here disagree.
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "porthole-changes-")));
     const run = (args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 
     run(["init", "-b", "main", "-q"]);
@@ -311,7 +312,7 @@ test("too many candidates are truncated with a way out", async () => {
 });
 
 test("outside a repository it explains itself instead of throwing", async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "porthole-norepo-")));
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "porthole-norepo-")));
     try {
         const out = await inRepo(root, () => changes({}));
         assert.equal(out, "porthole: not a git repository, so there is nothing to compare.");
