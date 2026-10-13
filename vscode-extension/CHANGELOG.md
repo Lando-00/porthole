@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.3.0
 
 - Tours store a Recorded comparison in their publication when the CLI sends
   one. It is never rewritten by progress, listing, advisories or diffs, and

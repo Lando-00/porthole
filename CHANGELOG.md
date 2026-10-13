@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.0
 
 **A walkthrough of a change remembers which change it explains.**
 `porthole_changes` now prints the exact comparison to pass, and `porthole_tour`
